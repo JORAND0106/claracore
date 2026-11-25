@@ -120,8 +120,13 @@ export default function BitacoraPresenciaExportModal({
     return () => { cancelled = true }
   }, [open, api, fechaDesde, fechaHasta, empresaKey, tipoL])
 
+  const tieneDetalle = filas.some((r) => {
+    const k = r?.tipo
+    return !k || k === 'detalle' || !['empresa', 'subtotal_empresa', 'total'].includes(k)
+  })
   const tieneFilas = filas.length > 0
-  const puedeDescargar = tieneFilas && !!empresaKey && !loading && !busy
+  const puedeDescargar = tieneDetalle && !!empresaKey && !loading && !busy
+  const ncolsFijas = 4
 
   const exportar = useCallback(async () => {
     if (!puedeDescargar || !api?.exportBitacoraPresenciaBlob) return
@@ -361,18 +366,54 @@ export default function BitacoraPresenciaExportModal({
               </thead>
               <tbody>
                 {filas.map((r, i) => {
-                  const rowBg = i % 2 ? 'transparent' : (t?.bg || 'transparent')
+                  const kindRaw = r?.tipo
+                  const kind = ['empresa', 'subtotal_empresa', 'total', 'detalle'].includes(kindRaw)
+                    ? kindRaw
+                    : 'detalle'
+                  const isEmp = kind === 'empresa'
+                  const isSubEmp = kind === 'subtotal_empresa'
+                  const isTot = kind === 'total'
+                  const rowBg = (isEmp || isTot)
+                    ? primary
+                    : isSubEmp
+                      ? headBg
+                      : (i % 2 ? 'transparent' : (t?.bg || 'transparent'))
+                  const rowColor = (isEmp || isTot) ? '#fff' : text
                   const cell = {
                     border: `1px solid ${border}`,
                     padding: '2px 4px',
                     background: rowBg,
+                    color: rowColor,
+                    fontWeight: (isEmp || isSubEmp || isTot) ? 800 : 400,
                   }
+                  if (isEmp) {
+                    return (
+                      <tr key={`empresa-${r.nombre}-${i}`}>
+                        <td
+                          colSpan={ncolsFijas + dias.length + 1}
+                          style={{ ...cell, whiteSpace: 'normal' }}
+                        >
+                          {r.nombre || 'Sin empresa'}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const nombreLbl = isSubEmp
+                    ? `Subtotal empresa · ${r.nombre || ''}`
+                    : isTot
+                      ? 'Total general'
+                      : r.nombre
+                  const tipoEq = r.tipo_equipo != null ? r.tipo_equipo : r.tipo
                   return (
-                    <tr key={`${r.no}-${r.nombre}-${i}`}>
-                      <td style={cell}>{r.no}</td>
-                      <td style={cell}>{r.nombre}</td>
-                      <td style={cell}>{esPersonal ? r.documento : r.identificacion}</td>
-                      <td style={cell}>{esPersonal ? r.cargo : r.tipo}</td>
+                    <tr key={`${kind}-${r.no}-${r.nombre}-${i}`}>
+                      <td style={cell}>{isSubEmp || isTot ? '' : r.no}</td>
+                      <td style={cell}>{nombreLbl}</td>
+                      <td style={cell}>
+                        {isSubEmp || isTot ? '' : (esPersonal ? r.documento : r.identificacion)}
+                      </td>
+                      <td style={cell}>
+                        {isSubEmp || isTot ? '' : (esPersonal ? r.cargo : tipoEq)}
+                      </td>
                       {(r.marcas || []).map((m, di) => (
                         <td
                           key={`${r.no}-${di}`}
@@ -380,7 +421,10 @@ export default function BitacoraPresenciaExportModal({
                             ...cell,
                             textAlign: 'center',
                             fontWeight: 800,
-                            background: dias[di]?.especial ? festBg : rowBg,
+                            background: (isEmp || isTot)
+                              ? primary
+                              : (dias[di]?.especial ? festBg : rowBg),
+                            color: rowColor,
                           }}
                         >
                           {m || ''}

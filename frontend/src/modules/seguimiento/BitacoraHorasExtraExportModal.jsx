@@ -150,6 +150,7 @@ export default function BitacoraHorasExtraExportModal({
 
   const tieneDetalle = filas.some((r) => !r?.tipo || r.tipo === 'detalle')
   const puedeDescargar = tieneDetalle && !!empresaKey && !loading && !busy
+  const ncolsHe = HEADERS_HE.length
 
   const exportar = useCallback(async () => {
     if (!puedeDescargar || !api?.exportBitacoraHorasExtraBlob) return
@@ -442,38 +443,55 @@ export default function BitacoraHorasExtraExportModal({
               <tbody>
                 {filas.map((r, i) => {
                   const tipo = r.tipo || 'detalle'
+                  const isEmp = tipo === 'empresa'
                   const isSub = tipo === 'subtotal'
+                  const isSubEmp = tipo === 'subtotal_empresa'
                   const isTot = tipo === 'total'
-                  const rowBg = isTot
+                  const rowBg = isTot || isEmp
                     ? primary
-                    : isSub
+                    : (isSub || isSubEmp)
                       ? headBg
                       : (i % 2 ? 'transparent' : (t?.bg || 'transparent'))
-                  const rowColor = isTot ? '#fff' : text
+                  const rowColor = (isTot || isEmp) ? '#fff' : text
                   const cell = {
                     border: `1px solid ${border}`,
                     padding: '2px 4px',
-                    fontWeight: (isSub || isTot) ? 800 : 400,
+                    fontWeight: (isSub || isSubEmp || isTot || isEmp) ? 800 : 400,
                     color: rowColor,
                     background: rowBg,
                     whiteSpace: 'nowrap',
                   }
+                  if (isEmp) {
+                    return (
+                      <tr key={`empresa-${r.nombre}-${i}`}>
+                        <td colSpan={ncolsHe} style={{ ...cell, whiteSpace: 'normal' }}>
+                          {r.nombre || 'Sin empresa'}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const nombreLbl = isSub
+                    ? `Subtotal · ${r.nombre || ''}`
+                    : isSubEmp
+                      ? `Subtotal empresa · ${r.nombre || ''}`
+                      : isTot
+                        ? 'Total general'
+                        : r.nombre
+                  const hideMeta = isSub || isSubEmp || isTot
                   return (
                     <tr key={`${tipo}-${r.fecha}-${r.documento}-${r.nombre}-${i}`}>
-                      <td style={cell}>{isSub || isTot ? '' : (r.no ?? '')}</td>
-                      <td style={{ ...cell, whiteSpace: 'normal' }}>
-                        {isSub ? `Subtotal · ${r.nombre || ''}` : isTot ? 'Total general' : r.nombre}
-                      </td>
-                      <td style={cell}>{isTot ? '' : (r.documento || '')}</td>
-                      <td style={cell}>{isSub || isTot ? '' : r.fecha}</td>
-                      <td style={cell}>{isSub || isTot ? '' : r.hora_inicio}</td>
-                      <td style={cell}>{isSub || isTot ? '' : r.hora_fin}</td>
+                      <td style={cell}>{hideMeta ? '' : (r.no ?? '')}</td>
+                      <td style={{ ...cell, whiteSpace: 'normal' }}>{nombreLbl}</td>
+                      <td style={cell}>{isTot || isSubEmp ? '' : (r.documento || '')}</td>
+                      <td style={cell}>{hideMeta ? '' : r.fecha}</td>
+                      <td style={cell}>{hideMeta ? '' : r.hora_inicio}</td>
+                      <td style={cell}>{hideMeta ? '' : r.hora_fin}</td>
                       <td style={cell}>{fmtExtra(r.extra_diurna)}</td>
                       <td style={cell}>{fmtExtra(r.extra_nocturna)}</td>
                       <td style={cell}>{fmtExtra(r.extra_festiva_diurna)}</td>
                       <td style={cell}>{fmtExtra(r.extra_festiva_nocturna)}</td>
                       <td style={{ ...cell, fontWeight: 800 }}>{fmtExtra(r.tiempo_extra)}</td>
-                      <td style={{ ...cell, whiteSpace: 'normal' }}>{isSub || isTot ? '' : (r.observacion || '—')}</td>
+                      <td style={{ ...cell, whiteSpace: 'normal' }}>{hideMeta ? '' : (r.observacion || '—')}</td>
                     </tr>
                   )
                 })}

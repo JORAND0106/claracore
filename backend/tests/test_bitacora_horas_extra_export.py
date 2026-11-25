@@ -355,4 +355,128 @@ def test_empresas_con_personal_reportado():
     emps = empresas_con_personal_reportado(diarios)
     nombres = [e["nombre"] for e in emps]
     assert nombres == ["Alpha", "Beta"]
+
+
+def test_empresas_con_opcion_todas():
+    from bitacora_horas_extra_export import (
+        EMPRESA_TODAS_KEY,
+        EMPRESA_TODAS_LABEL,
+        empresas_con_opcion_todas,
+        es_empresa_todas,
+    )
+
+    assert empresas_con_opcion_todas([]) == []
+    out = empresas_con_opcion_todas([{"key": "a", "nombre": "Alpha"}])
+    assert out[0] == {"key": EMPRESA_TODAS_KEY, "nombre": EMPRESA_TODAS_LABEL}
+    assert out[1]["nombre"] == "Alpha"
+    assert es_empresa_todas(EMPRESA_TODAS_KEY)
+    assert es_empresa_todas("Todas las empresas")
+    assert not es_empresa_todas("Alpha")
+
+
+def test_filas_agrupadas_por_empresa_subtotales_y_total():
+    detalle = [
+        {
+            "nombre": "Ana Perez",
+            "documento": "222",
+            "fecha": "2026-11-11",
+            "hora_inicio": "07:00",
+            "hora_fin": "19:00",
+            "tiempo_extra": 1.5,
+            "extra_diurna": 1.5,
+            "extra_nocturna": 0,
+            "extra_festiva_diurna": 0,
+            "extra_festiva_nocturna": 0,
+            "observacion": "Cierre",
+            "empresa": "Empresa A",
+            "empresa_key": "empresa a",
+        },
+        {
+            "nombre": "Luis Mora",
+            "documento": "333",
+            "fecha": "2026-11-12",
+            "hora_inicio": "07:30",
+            "hora_fin": "20:00",
+            "tiempo_extra": 3.0,
+            "extra_diurna": 2.0,
+            "extra_nocturna": 1.0,
+            "extra_festiva_diurna": 0,
+            "extra_festiva_nocturna": 0,
+            "observacion": "Emergencia",
+            "empresa": "Empresa B",
+            "empresa_key": "empresa b",
+        },
+        {
+            "nombre": "Luis Mora",
+            "documento": "333",
+            "fecha": "2026-11-13",
+            "hora_inicio": "07:30",
+            "hora_fin": "18:30",
+            "tiempo_extra": 1.0,
+            "extra_diurna": 1.0,
+            "extra_nocturna": 0,
+            "extra_festiva_diurna": 0,
+            "extra_festiva_nocturna": 0,
+            "observacion": "Extra",
+            "empresa": "Empresa B",
+            "empresa_key": "empresa b",
+        },
+    ]
+    vista = filas_informe_agrupadas(detalle, agrupar_por_empresa=True)
+    tipos = [r["tipo"] for r in vista]
+    assert tipos == [
+        "empresa", "detalle", "subtotal", "subtotal_empresa",
+        "empresa", "detalle", "detalle", "subtotal", "subtotal_empresa",
+        "total",
+    ]
+    # No continuo entre empresas
+    assert vista[1]["no"] == 1 and vista[5]["no"] == 2
+    assert vista[3]["tipo"] == "subtotal_empresa" and vista[3]["tiempo_extra"] == 1.5
+    assert vista[8]["tipo"] == "subtotal_empresa" and vista[8]["tiempo_extra"] == 4.0
+    assert vista[-1]["tiempo_extra"] == 5.5
+    assert vista[3]["extra_diurna"] == 1.5
+    assert vista[8]["extra_diurna"] == 3.0 and vista[8]["extra_nocturna"] == 1.0
+
+    # Una sola empresa: mismo resultado que antes (sin filas empresa)
+    solo_a = [r for r in detalle if r["empresa_key"] == "empresa a"]
+    vista_a = filas_informe_agrupadas(solo_a, agrupar_por_empresa=False)
+    assert [r["tipo"] for r in vista_a] == ["detalle", "subtotal", "total"]
+    assert vista_a[-1]["tiempo_extra"] == 1.5
+
+
+def test_construir_filas_todas_empresas():
+    from bitacora_horas_extra_export import EMPRESA_TODAS_KEY
+
+    diarios = [
+        {
+            "tipo": "diario",
+            "fecha": "2026-11-11",
+            "asistencia_colaboradores": [
+                {
+                    "nombre": "Ana Perez",
+                    "documento_numero": "222",
+                    "subcontratista_nombre": "Empresa A",
+                    "hora_ingreso": "07:00",
+                    "hora_salida": "19:00",
+                    "horas_extra": 1.5,
+                    "justificacion_horas_extra": "Cierre",
+                },
+                {
+                    "nombre": "Luis Mora",
+                    "documento_numero": "333",
+                    "subcontratista_nombre": "Empresa B",
+                    "hora_ingreso": "07:30",
+                    "hora_salida": "20:00",
+                    "horas_extra": 3,
+                    "justificacion_horas_extra": "Emergencia",
+                },
+            ],
+        },
+    ]
+    todas = construir_filas_horas_extra(diarios, empresa_key=EMPRESA_TODAS_KEY)
+    assert len(todas) == 2
+    assert {r["empresa"] for r in todas} == {"Empresa A", "Empresa B"}
+    vista = filas_informe_agrupadas(todas, agrupar_por_empresa=True)
+    assert vista[-1]["tiempo_extra"] == 4.5
+    assert any(r["tipo"] == "empresa" and r["nombre"] == "Empresa A" for r in vista)
     assert CODIGO_FORMATO_HORAS_EXTRA == "CC-BIT-HE-001"
