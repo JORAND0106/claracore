@@ -17,6 +17,7 @@ import { hoyBogotaDate } from './vencimientoLevels'
 import {
   CALENDARIO_KIND,
   CALENDARIO_VENCIDOS_LEGEND,
+  CALENDARIO_FESTIVO_LEGEND,
   buildCalendarioEvents,
   compareCalendarioEvents,
   dayHasVencidos,
@@ -26,6 +27,7 @@ import {
   eventsForDate,
   filterEventsByOrigen,
   filterEventsSoloMias,
+  marcaCalendarioFecha,
   resolveFetchRange,
   sortDayEvents,
   summarizeDayCounts,
@@ -337,16 +339,24 @@ export default function SeguimientoCalendario({
     const dateStr = toDateOnly(arg.date)
     const summary = isMonth ? summarizeDayCounts(events, dateStr) : null
     const vencido = isMonth ? dayHasVencidos(events, dateStr, hoyBogotaDate()) : false
+    const marca = marcaCalendarioFecha(dateStr)
     const indicators = (widgetMode && summary?.total > 0) || vencido
       ? dayKindIndicators(summary || {}, { hasVencidos: vencido })
       : []
     const tip = [
+      marca?.tooltip || '',
       summary?.label || '',
       vencido ? CALENDARIO_VENCIDOS_LEGEND.label : '',
     ].filter(Boolean).join(' · ')
 
     return (
-      <div className={`cc-seguim-cal-daycell${widgetMode ? ' cc-seguim-cal-daycell--widget' : ''}`}>
+      <div
+        className={`cc-seguim-cal-daycell${widgetMode ? ' cc-seguim-cal-daycell--widget' : ''}${marca ? ' cc-seguim-cal-daycell--festivo' : ''}`}
+        title={tip || undefined}
+        data-cc-tooltip={marca?.tooltip || undefined}
+        data-cc-tooltip-variant={marca ? 'short' : undefined}
+        aria-label={tip || undefined}
+      >
         <span className="cc-seguim-cal-daynum">{arg.dayNumberText}</span>
         {isMonth && widgetMode && indicators.length > 0 ? (
           <span className="cc-seguim-cal-daydots" title={tip || undefined} aria-label={tip || undefined}>
@@ -369,11 +379,21 @@ export default function SeguimientoCalendario({
 
   const dayCellClassNames = useCallback((arg) => {
     const dateStr = toDateOnly(arg.date)
-    if (dayHasVencidos(events, dateStr, hoyBogotaDate())) {
-      return ['cc-seguim-cal-day--vencido']
+    const classes = []
+    if (marcaCalendarioFecha(dateStr)) {
+      classes.push('cc-seguim-cal-day--festivo')
     }
-    return []
+    if (dayHasVencidos(events, dateStr, hoyBogotaDate())) {
+      classes.push('cc-seguim-cal-day--vencido')
+    }
+    return classes
   }, [events])
+
+  /** Cabeceras de semana/día (timeGrid) + columnas. */
+  const dayHeaderClassNames = useCallback((arg) => {
+    const dateStr = toDateOnly(arg.date)
+    return marcaCalendarioFecha(dateStr) ? ['cc-seguim-cal-day--festivo'] : []
+  }, [])
 
   const legend = useMemo(
     () => Object.values(CALENDARIO_KIND).filter((k) => k.id !== 'bitacora_evento'),
@@ -847,6 +867,7 @@ export default function SeguimientoCalendario({
           eventContent={eventContent}
           dayCellContent={dayCellContent}
           dayCellClassNames={dayCellClassNames}
+          dayHeaderClassNames={dayHeaderClassNames}
           dayMaxEvents={widgetMode ? false : (viewportCompact ? 3 : 4)}
           moreLinkClick="popover"
           nowIndicator
@@ -921,6 +942,31 @@ export default function SeguimientoCalendario({
           {!widgetMode && CALENDARIO_VENCIDOS_LEGEND.label}
           {widgetMode && 'Venc.'}
         </span>
+        <span
+          title={CALENDARIO_FESTIVO_LEGEND.tooltip}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: widgetMode ? '2px 6px' : '3px 8px',
+            borderRadius: 999,
+            border: `1px solid ${CALENDARIO_FESTIVO_LEGEND.color}66`,
+            background: `color-mix(in srgb, ${CALENDARIO_FESTIVO_LEGEND.color} 16%, transparent)`,
+            fontSize: widgetMode ? 'var(--cc-xs)' : 'var(--cc-sm)',
+            color: t.text,
+            cursor: 'help',
+          }}
+        >
+          <span style={{
+            width: 10, height: 10, borderRadius: 3,
+            background: CALENDARIO_FESTIVO_LEGEND.color,
+            display: 'inline-block',
+            flexShrink: 0,
+          }}
+          />
+          {!widgetMode && CALENDARIO_FESTIVO_LEGEND.label}
+          {widgetMode && 'Fest.'}
+        </span>
       </div>
 
       {dayMenu && createPortal(
@@ -973,6 +1019,20 @@ export default function SeguimientoCalendario({
                 <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text }}>
                   {dayMenu.dateStr.split('-').reverse().join('/')}
                 </div>
+                {(() => {
+                  const marcaDia = marcaCalendarioFecha(dayMenu.dateStr)
+                  return marcaDia ? (
+                    <div style={{
+                      fontSize: 'var(--cc-xs)',
+                      color: CALENDARIO_FESTIVO_LEGEND.color,
+                      fontWeight: 700,
+                      marginTop: 2,
+                    }}
+                    >
+                      {marcaDia.tooltip}
+                    </div>
+                  ) : null
+                })()}
                 <div style={{ fontSize: 'var(--cc-xs)', color: t.textMuted, marginTop: 2 }}>
                   {dayEvents.length === 0
                     ? 'Sin elementos este día'
