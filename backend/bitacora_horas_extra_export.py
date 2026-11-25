@@ -28,8 +28,45 @@ VERSION_FORMATO_HORAS_EXTRA = "1.0"
 EMPRESA_SIN_NOMBRE = "Sin empresa"
 
 
+def _texto_unicode(s: Any) -> str:
+    """NFC para que tildes/eñes lleguen bien a PDF/Word."""
+    return unicodedata.normalize("NFC", str(s if s is not None else ""))
+
+
 def _esc(s: Any) -> str:
-    return html.escape(str(s if s is not None else ""), quote=True)
+    return html.escape(_texto_unicode(s), quote=True)
+
+
+_NOMBRE_PARTICULAS = frozenset({
+    "de", "del", "la", "las", "los", "y", "e", "da", "das", "do", "dos",
+})
+
+
+def _nombre_persona_informe(s: Any) -> str:
+    """
+    Nombre de persona para firmas/cabecera.
+    Corrige artefactos tipo «EspaÑOl» → «Español» (mayúsculas internas
+    tras un .title() defectuoso) sin tocar el contenido semántico.
+    """
+    raw = _texto_unicode(s).strip()
+    if not raw or raw == "—":
+        return raw or "—"
+    parts = re.split(r"(\s+|-)", raw)
+    out: List[str] = []
+    word_i = 0
+    for p in parts:
+        if not p or p.isspace() or p == "-":
+            out.append(p)
+            continue
+        low = p.lower()
+        if word_i > 0 and low in _NOMBRE_PARTICULAS:
+            out.append(low)
+        elif len(p) == 1:
+            out.append(p.upper())
+        else:
+            out.append(p[:1].upper() + p[1:].lower())
+        word_i += 1
+    return "".join(out)
 
 
 def _key_empresa(nombre: Any) -> str:
@@ -492,16 +529,16 @@ def construir_informe_horas_extra(
         "empresa": emp_nombre,
         "empresa_key": emp_key,
         "responsable": {
-            "nombre": _usuario_nombre(resp),
-            "cargo": _usuario_cargo(resp),
+            "nombre": _nombre_persona_informe(_usuario_nombre(resp)),
+            "cargo": _nombre_persona_informe(_usuario_cargo(resp)) if _usuario_cargo(resp) else "",
         },
         "elaboro": {
-            "nombre": _usuario_nombre(elaboro),
-            "cargo": _usuario_cargo(elaboro) or "Elaboró",
+            "nombre": _nombre_persona_informe(_usuario_nombre(elaboro)),
+            "cargo": _nombre_persona_informe(_usuario_cargo(elaboro) or "Elaboró"),
         },
         "aprobo": {
-            "nombre": _usuario_nombre(aprobo),
-            "cargo": _usuario_cargo(aprobo) or "Aprobó",
+            "nombre": _nombre_persona_informe(_usuario_nombre(aprobo)),
+            "cargo": _nombre_persona_informe(_usuario_cargo(aprobo) or "Aprobó"),
         },
         "filas": filas,
         "formato": {
@@ -625,24 +662,36 @@ def _html_informe(payload: dict) -> str:
     elaboro = payload.get("elaboro") or {}
     aprobo = payload.get("aprobo") or {}
     responsable = payload.get("responsable") or {}
+    elaboro_nom = _nombre_persona_informe(elaboro.get("nombre") or "—")
+    elaboro_cargo = _nombre_persona_informe(elaboro.get("cargo") or "") if elaboro.get("cargo") else ""
+    aprobo_nom = _nombre_persona_informe(aprobo.get("nombre") or "—")
+    aprobo_cargo = _nombre_persona_informe(aprobo.get("cargo") or "") if aprobo.get("cargo") else ""
+    responsable_nom = _nombre_persona_informe(responsable.get("nombre") or "—")
 
-    firmas_row = f"""
-<tr class="firmas-row">
-  <td colspan="4" style="vertical-align:top;padding:6pt 10pt;">
-    <div class="lbl">Elaboró</div>
-    <div class="line"></div>
-    <div class="nom">{_esc(elaboro.get("nombre") or "—")}</div>
-    <div class="cargo">{_esc(elaboro.get("cargo") or "")}</div>
+    # Firmas FUERA de la grilla (si van dentro, xhtml2pdf repite thead sin filas).
+    # Espaciador con &nbsp; (xhtml2pdf ignora height en divs vacíos) — solo lo
+    # justo para firma a mano. Tabla compacta: no dejar que se estire al final.
+    firmas_html = f"""
+<table class="firmas" style="page-break-before:avoid;page-break-inside:avoid;">
+<tr>
+  <td class="firma-cell" style="vertical-align:top;">
+    <div class="firma-lbl">Elaboró</div>
+    <div class="firma-sp">&nbsp;</div>
+    <div class="firma-line">&nbsp;</div>
+    <div class="firma-nom">{_esc(elaboro_nom)}</div>
+    <div class="firma-cargo">{_esc(elaboro_cargo)}</div>
   </td>
-  <td colspan="4" style="vertical-align:top;padding:6pt 10pt;">
-    <div class="lbl">Aprobó</div>
-    <div class="line"></div>
-    <div class="nom">{_esc(aprobo.get("nombre") or "—")}</div>
-    <div class="cargo">{_esc(aprobo.get("cargo") or "")}</div>
+  <td class="firma-cell" style="vertical-align:top;">
+    <div class="firma-lbl">Aprobó</div>
+    <div class="firma-sp">&nbsp;</div>
+    <div class="firma-line">&nbsp;</div>
+    <div class="firma-nom">{_esc(aprobo_nom)}</div>
+    <div class="firma-cargo">{_esc(aprobo_cargo)}</div>
   </td>
-</tr>"""
+</tr>
+</table>
+<div style="font-size:1pt;line-height:1pt;">&nbsp;</div>"""
 
-    closing_body = f"{total_row_html}{firmas_row}"
     thead_html = """
 <thead>
 <tr>
@@ -657,8 +706,7 @@ def _html_informe(payload: dict) -> str:
 </tr>
 </thead>"""
 
-    # Multi-página: mover últimos grupos + total + firmas a hoja final (evita
-    # firmas solas). Encabezado va con keep-with-next al inicio de la grilla.
+    # Multi-página: últimos grupos + total en hoja final; firmas debajo (sin thead).
     force_closing_page = len(body_rows) >= _PDF_FORCE_CLOSING_BODY_ROWS
     main_rows = list(body_rows)
     trail_rows: List[str] = []
@@ -681,16 +729,17 @@ def _html_informe(payload: dict) -> str:
             f'<div style="page-break-before:always;">'
             f'<table class="grid">{thead_html}'
             f'<tbody class="closing" style="page-break-inside:avoid;">'
-            f"{trail_html}{closing_body}</tbody></table></div>"
+            f"{trail_html}{total_row_html}</tbody></table>"
+            f"{firmas_html}</div>"
         )
     else:
         grid_html = (
             f'<table class="grid">{thead_html}'
-            f'<tbody class="closing">{main_html}{closing_body}</tbody></table>'
+            f'<tbody class="closing">{main_html}{total_row_html}</tbody></table>'
+            f"{firmas_html}"
         )
 
-    # -pdf-keep-with-next en hdr/meta: sin esto xhtml2pdf deja el encabezado
-    # solo en la primera hoja cuando la grilla pasa a la siguiente.
+    # -pdf-keep-with-next en hdr/meta: une encabezado al inicio de la grilla.
     html_doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
@@ -735,15 +784,38 @@ def _html_informe(payload: dict) -> str:
   }}
   table.grid thead {{ display: table-header-group; }}
   table.grid tbody {{ display: table-row-group; }}
-  table.grid tr.firmas-row td {{
+  table.firmas {{
+    width: 100%;
+    margin: 3pt 0 0 0;
+  }}
+  table.firmas td.firma-cell {{
+    width: 50%;
+    vertical-align: top;
+    padding: 2pt 8pt 3pt 8pt;
     border: 0.6pt solid #94A3B8;
     background: #FFFFFF;
-    color: #0F2942;
   }}
-  .lbl {{ font-size: 8pt; font-weight: bold; color: {t2["text"]}; margin-bottom: 10pt; }}
-  .line {{ border-bottom: 0.8pt solid #64748B; height: 36pt; margin-bottom: 6pt; }}
-  .nom {{ font-size: 8.5pt; font-weight: bold; }}
-  .cargo {{ font-size: 7.5pt; color: #475569; }}
+  .firma-lbl {{
+    font-size: 7.5pt;
+    font-weight: bold;
+    color: {t2["text"]};
+    margin: 0;
+    line-height: 1.1;
+  }}
+  .firma-sp {{
+    font-size: 11pt;
+    line-height: 12pt;
+    color: #FFFFFF;
+    margin: 0;
+  }}
+  .firma-line {{
+    border-bottom: 0.8pt solid #64748B;
+    font-size: 2pt;
+    line-height: 2pt;
+    margin: 0 0 1pt 0;
+  }}
+  .firma-nom {{ font-size: 8pt; font-weight: bold; line-height: 1.1; margin: 0; }}
+  .firma-cargo {{ font-size: 7pt; color: #475569; line-height: 1.1; margin: 0; }}
 </style></head><body>
 <table class="hdr" style="-pdf-keep-with-next:true;page-break-after:avoid;"><tr>
   <td class="logo">{logo_html}</td>
@@ -764,7 +836,7 @@ Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
   <td class="lbl">Empresa (tiempo extra)</td>
   <td>{_esc(payload.get("empresa") or "—")}</td>
   <td class="lbl">Responsable de obra</td>
-  <td>{_esc(responsable.get("nombre") or "—")}</td>
+  <td>{_esc(responsable_nom)}</td>
   <td class="lbl">Periodo</td>
   <td>{_esc(_fmt_fecha_es(payload.get("fecha_desde")))} – {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr>
@@ -835,7 +907,12 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
         ("Contrato", contrato.get("numero") or "—"),
         ("Objeto", contrato.get("objeto") or "—"),
         ("Empresa (tiempo extra)", payload.get("empresa") or "—"),
-        ("Responsable de obra", (payload.get("responsable") or {}).get("nombre") or "—"),
+        (
+            "Responsable de obra",
+            _nombre_persona_informe(
+                (payload.get("responsable") or {}).get("nombre") or "—"
+            ),
+        ),
         (
             "Periodo",
             f"{_fmt_fecha_es(payload.get('fecha_desde'))} – {_fmt_fecha_es(payload.get('fecha_hasta'))}",
@@ -845,7 +922,7 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
         r = p.add_run(f"{label}: ")
         r.bold = True
         r.font.size = Pt(9)
-        p.add_run(str(value)).font.size = Pt(9)
+        p.add_run(_texto_unicode(value)).font.size = Pt(9)
 
     headers = [
         "No", "Nombre colaborador", "No. Documento", "Fecha",
@@ -927,7 +1004,7 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
             bold = False
         for ci, val in enumerate(vals):
             cell = table.rows[ri + 1].cells[ci]
-            cell.text = str(val)
+            cell.text = _texto_unicode(val)
             if fill:
                 _shade(cell, fill)
             for p in cell.paragraphs:
@@ -958,17 +1035,22 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
         cell = firmas.rows[0].cells[idx]
         cell.text = ""
         p0 = cell.paragraphs[0]
-        r0 = p0.add_run(lbl)
+        r0 = p0.add_run(_texto_unicode(lbl))
         r0.bold = True
         r0.font.size = Pt(9)
-        cell.add_paragraph("")
-        cell.add_paragraph("")
+        # Espacio mínimo para firma a mano (una línea en blanco, no dos).
+        p_sp = cell.add_paragraph("")
+        p_sp.paragraph_format.space_before = Pt(0)
+        p_sp.paragraph_format.space_after = Pt(0)
         p1 = cell.add_paragraph()
-        r1 = p1.add_run(str(person.get("nombre") or "—"))
+        r1 = p1.add_run(_nombre_persona_informe(person.get("nombre") or "—"))
         r1.bold = True
         r1.font.size = Pt(9)
         p2 = cell.add_paragraph()
-        r2 = p2.add_run(str(person.get("cargo") or ""))
+        cargo_txt = person.get("cargo") or ""
+        r2 = p2.add_run(
+            _nombre_persona_informe(cargo_txt) if cargo_txt else ""
+        )
         r2.font.size = Pt(8)
         r2.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
