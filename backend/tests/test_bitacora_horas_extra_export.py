@@ -133,6 +133,26 @@ def test_filas_informe_agrupadas_subtotales_y_total():
     assert vista[0]["documento"] == vista[1]["documento"] == "222"
 
 
+def _payload_vista(vista, **extra):
+    base = {
+        "contrato": {"numero": "CTO-1", "objeto": "Obra", "contratista": "X"},
+        "empresa": "Empresa A",
+        "fecha_desde": "2026-11-01",
+        "fecha_hasta": "2026-11-30",
+        "responsable": {"nombre": "R"},
+        "elaboro": {"nombre": "E", "cargo": "Aux"},
+        "aprobo": {"nombre": "A", "cargo": "Dir"},
+        "filas": vista,
+        "formato": {
+            "codigo": CODIGO_FORMATO_HORAS_EXTRA,
+            "version": "1.0",
+            "titulo": "INFORME DE HORAS EXTRAS DEL PERSONAL",
+        },
+    }
+    base.update(extra)
+    return base
+
+
 def test_html_pdf_sin_margenes_y_firmas_con_total():
     from bitacora_horas_extra_export import _html_informe
 
@@ -157,32 +177,83 @@ def test_html_pdf_sin_margenes_y_firmas_con_total():
         },
     ]
     vista = filas_informe_agrupadas(detalle)
-    html = _html_informe({
-        "contrato": {"numero": "CTO-1", "objeto": "Obra", "contratista": "X"},
-        "empresa": "Empresa A",
-        "fecha_desde": "2026-11-01",
-        "fecha_hasta": "2026-11-30",
-        "responsable": {"nombre": "R"},
-        "elaboro": {"nombre": "E", "cargo": "Aux"},
-        "aprobo": {"nombre": "A", "cargo": "Dir"},
-        "filas": vista,
-        "formato": {
-            "codigo": CODIGO_FORMATO_HORAS_EXTRA,
-            "version": "1.0",
-            "titulo": "INFORME DE HORAS EXTRAS DEL PERSONAL",
-        },
-    })
+    html = _html_informe(_payload_vista(vista))
     assert "margin: 2mm" in html
     assert "margin: 12mm" not in html
     assert 'class="firmas-row"' in html
     assert 'class="closing"' in html
+    assert "-pdf-keep-with-next:true" in html
     assert "page-break-after:avoid" in html
     assert "page-break-before:avoid" in html
     assert 'class="subtotal' in html
     assert 'class="total"' in html
+    assert "page-break-before:always" not in html  # informe corto: una hoja
     closing = html[html.index('class="closing"'):]
     assert closing.index("Total general") < closing.index("Elaboró")
     assert "Aprobó" in closing
+
+
+def test_html_multipagina_encabezado_unido_y_cierre_final():
+    """Con muchas filas: keep-with-next en hdr/meta + cierre en hoja final."""
+    from bitacora_horas_extra_export import _html_informe, generar_pdf_horas_extra
+
+    detalle = []
+    for i in range(20):
+        detalle.append({
+            "nombre": f"Colab {i:02d}",
+            "documento": str(1000 + i),
+            "fecha": "2026-11-10",
+            "hora_inicio": "07:30",
+            "hora_fin": "19:30",
+            "tiempo_extra": 2.0,
+            "observacion": "Extra",
+        })
+    vista = filas_informe_agrupadas(detalle)
+    html = _html_informe(_payload_vista(vista))
+    assert 'class="hdr" style="-pdf-keep-with-next:true' in html
+    assert 'class="meta" style="-pdf-keep-with-next:true' in html
+    assert "page-break-before:always" in html
+    assert html.index('class="hdr"') < html.index('class="grid"')
+    closing = html[html.index("page-break-before:always"):]
+    assert "Total general" in closing and "Elaboró" in closing
+
+    pdf = generar_pdf_horas_extra(_payload_vista(vista))
+    assert pdf[:4] == b"%PDF"
+    from pypdf import PdfReader
+    import io
+    reader = PdfReader(io.BytesIO(pdf))
+    assert len(reader.pages) >= 2
+    p1 = reader.pages[0].extract_text() or ""
+    # Encabezado NO solo: debe traer contrato/tabla en la 1ª hoja
+    assert "INFORME" in p1
+    assert ("Contrato" in p1) or ("Nombre colaborador" in p1)
+    last = reader.pages[-1].extract_text() or ""
+    assert "Total general" in last and "Elaboró" in last
+
+
+def test_pdf_generacion_rapida_informe_largo():
+    from bitacora_horas_extra_export import generar_pdf_horas_extra
+    import time
+
+    detalle = []
+    for i in range(50):
+        for d in range(4):
+            detalle.append({
+                "nombre": f"Colab {i:03d}",
+                "documento": str(2000 + i),
+                "fecha": f"2026-11-{d + 1:02d}",
+                "hora_inicio": "07:30",
+                "hora_fin": "19:30",
+                "tiempo_extra": 1.5,
+                "observacion": "Jornada extendida",
+            })
+    vista = filas_informe_agrupadas(detalle)
+    payload = _payload_vista(vista)
+    t0 = time.perf_counter()
+    pdf = generar_pdf_horas_extra(payload)
+    elapsed = time.perf_counter() - t0
+    assert pdf[:4] == b"%PDF"
+    assert elapsed < 10.0, f"PDF tardó {elapsed:.2f}s (límite 10s)"
 
 
 def test_empresas_con_personal_reportado():

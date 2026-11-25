@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from bitacora_export_rango import list_diarios_rango
 from bitacora_horario import calcular_horas_extra, get_horario_contrato, normalize_horario
-from bitacora_pdf import _palette, _prefetch_logos
+from bitacora_pdf import _palette
 from bitacora_service import contrato_meta_bitacora
 from topografia_utils import to_pdf_bytes
 
@@ -353,6 +353,63 @@ def _resolver_usuario(usuarios: List[dict], usuario_id: Optional[int]) -> Option
     return None
 
 
+def _cargar_usuarios_por_ids(sb, usuario_ids: List[Optional[int]]) -> Dict[int, dict]:
+    """Carga solo los firmantes/responsable pedidos (evita listar todo el contrato)."""
+    ids: List[int] = []
+    for raw in usuario_ids or []:
+        if raw is None or raw == "":
+            continue
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}
+    try:
+        users = (
+            sb.table("usuarios")
+            .select("id, nombre, apellidos, email, cargo_id, activo")
+            .in_("id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        _log.warning("horas_extra usuarios por id: %s", exc)
+        return {}
+    cargo_ids = list({u.get("cargo_id") for u in users if u.get("cargo_id")})
+    cargos: Dict[Any, Any] = {}
+    if cargo_ids:
+        try:
+            crows = (
+                sb.table("cargos")
+                .select("id, nombre")
+                .in_("id", cargo_ids)
+                .execute()
+                .data
+                or []
+            )
+            cargos = {c["id"]: c.get("nombre") for c in crows}
+        except Exception:
+            cargos = {}
+    out: Dict[int, dict] = {}
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        try:
+            uid = int(u.get("id"))
+        except (TypeError, ValueError):
+            continue
+        row = dict(u)
+        cid = u.get("cargo_id")
+        if cid is not None and cid in cargos:
+            row["cargo_nombre"] = cargos[cid]
+            row["cargo"] = cargos[cid]
+        out[uid] = row
+    return out
+
+
 def construir_informe_horas_extra(
     sb,
     contrato_id: int,
@@ -365,12 +422,14 @@ def construir_informe_horas_extra(
     aprobador_id: Optional[int] = None,
 ) -> dict:
     """Arma el payload del informe o lanza ValueError si no hay filas."""
-    from seguimiento_service import list_usuarios_contrato_enriquecidos
+    import time as _time
 
     if not str(empresa_key or "").strip():
         raise ValueError("Seleccione la empresa a la cual se genera el tiempo extra.")
 
+    t0 = _time.perf_counter()
     diarios = list_diarios_rango(sb, contrato_id, fecha_desde, fecha_hasta)
+    t_diarios = _time.perf_counter()
     try:
         horario_contrato = get_horario_contrato(sb, int(contrato_id))
     except Exception:
@@ -386,27 +445,52 @@ def construir_informe_horas_extra(
             "No hay tiempo extra registrado para el rango y la empresa seleccionados."
         )
     filas = filas_informe_agrupadas(detalle)
+    t_filas = _time.perf_counter()
 
     contrato = contrato_meta_bitacora(sb, int(contrato_id)) or {}
-    usuarios = list_usuarios_contrato_enriquecidos(sb, int(contrato_id)) or []
-    resp = _resolver_usuario(usuarios, responsable_id)
-    elaboro = _resolver_usuario(usuarios, elaborador_id)
-    aprobo = _resolver_usuario(usuarios, aprobador_id)
-
-    emp_nombre = next(
-        (e["nombre"] for e in empresas_con_personal_reportado(diarios)
-         if e["key"] == _key_empresa(empresa_key)),
-        None,
+    users_by_id = _cargar_usuarios_por_ids(
+        sb, [responsable_id, elaborador_id, aprobador_id],
     )
+
+    def _by_id(raw_id: Optional[int]) -> Optional[dict]:
+        if raw_id is None:
+            return None
+        try:
+            return users_by_id.get(int(raw_id))
+        except (TypeError, ValueError):
+            return None
+
+    resp = _by_id(responsable_id)
+    elaboro = _by_id(elaborador_id)
+    aprobo = _by_id(aprobador_id)
+    t_meta = _time.perf_counter()
+
+    emp_key = _key_empresa(empresa_key)
+    emp_nombre = None
+    for e in empresas_con_personal_reportado(diarios):
+        if e["key"] == emp_key:
+            emp_nombre = e["nombre"]
+            break
     if not emp_nombre:
         emp_nombre = detalle[0].get("empresa") or EMPRESA_SIN_NOMBRE
+
+    _log.info(
+        "horas_extra payload contrato=%s diarios=%s filas=%s "
+        "ms_diarios=%.0f ms_filas=%.0f ms_meta=%.0f",
+        contrato_id,
+        len(diarios or []),
+        len(filas),
+        (t_diarios - t0) * 1000,
+        (t_filas - t_diarios) * 1000,
+        (t_meta - t_filas) * 1000,
+    )
 
     return {
         "contrato": contrato,
         "fecha_desde": str(fecha_desde)[:10],
         "fecha_hasta": str(fecha_hasta)[:10],
         "empresa": emp_nombre,
-        "empresa_key": _key_empresa(empresa_key),
+        "empresa_key": emp_key,
         "responsable": {
             "nombre": _usuario_nombre(resp),
             "cargo": _usuario_cargo(resp),
@@ -428,7 +512,21 @@ def construir_informe_horas_extra(
     }
 
 
+# Filas de cuerpo (detalle+subtotal) a partir de las cuales una sola hoja carta
+# landscape ya no alcanza con encabezado+meta+firmas → cierre en hoja final.
+_PDF_FORCE_CLOSING_BODY_ROWS = 29
+
+
 def _html_informe(payload: dict) -> str:
+    """
+    HTML del PDF. Prioridades de paginación (xhtml2pdf):
+    1) Encabezado 3 paneles + datos generales unidos al inicio de la tabla.
+    2) Firmas en la misma hoja que el final de la tabla (total + filas finales).
+    Nunca hojas con solo encabezado o solo firmas.
+    """
+    import time as _time
+
+    t0 = _time.perf_counter()
     contrato = payload.get("contrato") or {}
     pal = _palette(contrato)
     t1 = pal.get("titulo_1") or {"bg": "#0077B6", "text": "#FFFFFF"}
@@ -436,35 +534,41 @@ def _html_informe(payload: dict) -> str:
     fmt = payload.get("formato") or {}
     filas = payload.get("filas") or []
 
-    logo_uris = {}
+    # Solo el logo que se pinta (no los 3). Bitmap ya acotado; width/height fijos
+    # porque xhtml2pdf ignora max-height/max-width CSS.
+    logo_uri = ""
     try:
-        logo_uris = _prefetch_logos(contrato) or {}
+        from pdf_institucional import prepare_image_for_pdf
+
+        raw_logo = str(contrato.get("logo_contratista") or "").strip()
+        if raw_logo:
+            logo_uri = prepare_image_for_pdf(
+                raw_logo, max_px_w=120, max_px_h=56, allow_http=True,
+            ) or ""
     except Exception as exc:
-        _log.debug("logos horas extra: %s", exc)
-    logo_uri = logo_uris.get("logo_contratista") or ""
+        _log.debug("logo horas extra: %s", exc)
     if logo_uri:
         logo_html = (
-            f'<img src="{_esc(logo_uri)}" style="max-height:42pt;max-width:90pt;'
-            f'object-fit:contain;" alt="Logo"/>'
+            f'<img src="{_esc(logo_uri)}" width="90" height="42" '
+            f'style="width:90pt;height:42pt;" alt="Logo"/>'
         )
     else:
         logo_html = (
             f'<div style="font-size:9pt;font-weight:bold;color:{t1["text"]};">'
             f'{_esc(contrato.get("contratista") or "ClaraCore")}</div>'
         )
+    t_logo = _time.perf_counter()
 
-    # Agrupar HTML por colaborador (detalle+subtotal) para no partir grupos cerrados.
-    group_bodies: List[str] = []
-    cur_rows: List[str] = []
+    body_rows: List[str] = []
     total_row_html = ""
     det_i = 0
     for r in filas:
         tipo = str(r.get("tipo") or "detalle")
         if tipo == "subtotal":
             bg = t2.get("bg") or "#E5F4FA"
-            # page-break-before:avoid → el subtotal no se separa de las filas del colaborador.
-            cur_rows.append(
-                "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;page-break-before:avoid;\">"
+            body_rows.append(
+                "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;"
+                "page-break-before:avoid;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Subtotal · %s</td>"
                 "<td style=\"text-align:center;\">%s</td>"
@@ -475,8 +579,6 @@ def _html_informe(payload: dict) -> str:
                     _esc(_fmt_extra(r.get("tiempo_extra"))),
                 )
             )
-            group_bodies.append("".join(cur_rows))
-            cur_rows = []
             continue
         if tipo == "total":
             bg = t1.get("bg") or "#0077B6"
@@ -497,7 +599,7 @@ def _html_informe(payload: dict) -> str:
             continue
         det_i += 1
         bg = "#FFFFFF" if det_i % 2 else "#F8FAFC"
-        cur_rows.append(
+        body_rows.append(
             "<tr style=\"background:%s;\">"
             "<td style=\"text-align:center;\">%s</td>"
             "<td>%s</td>"
@@ -519,15 +621,11 @@ def _html_informe(payload: dict) -> str:
                 _esc(r.get("observacion")),
             )
         )
-    if cur_rows:
-        group_bodies.append("".join(cur_rows))
 
     elaboro = payload.get("elaboro") or {}
     aprobo = payload.get("aprobo") or {}
     responsable = payload.get("responsable") or {}
 
-    # Total + firmas (filas planas). Si el último colaborador es pequeño, viaja
-    # con el cierre para que las firmas no queden solas en otra hoja.
     firmas_row = f"""
 <tr class="firmas-row">
   <td colspan="4" style="vertical-align:top;padding:6pt 10pt;">
@@ -544,21 +642,7 @@ def _html_informe(payload: dict) -> str:
   </td>
 </tr>"""
 
-    trailing = ""
-    if group_bodies and group_bodies[-1].count("<tr") <= 6:
-        trailing = group_bodies.pop()
-        trailing = trailing.replace(
-            "page-break-before:avoid;",
-            "page-break-before:avoid;-pdf-keep-with-next:true;",
-            1,
-        )
-
-    tbodies = [f"<tbody>{b}</tbody>" for b in group_bodies]
-    # Con muchos grupos xhtml2pdf parte el keep-together: emitir el cierre en
-    # una tabla propia en hoja nueva (con thead repetido) para garantizar
-    # total+firmas (+ último colaborador) juntos.
-    force_last_page = len(tbodies) >= 10
-    closing_body = f"{trailing}{total_row_html}{firmas_row}"
+    closing_body = f"{total_row_html}{firmas_row}"
     thead_html = """
 <thead>
 <tr>
@@ -572,27 +656,46 @@ def _html_informe(payload: dict) -> str:
   <th style="width:24%;">Observación</th>
 </tr>
 </thead>"""
-    if force_last_page:
-        closing_tbody = ""
-        closing_extra = (
+
+    # Multi-página: mover últimos grupos + total + firmas a hoja final (evita
+    # firmas solas). Encabezado va con keep-with-next al inicio de la grilla.
+    force_closing_page = len(body_rows) >= _PDF_FORCE_CLOSING_BODY_ROWS
+    main_rows = list(body_rows)
+    trail_rows: List[str] = []
+    if force_closing_page and main_rows:
+        sub_idx = [i for i, tr in enumerate(main_rows) if 'class="subtotal"' in tr]
+        if len(sub_idx) >= 2:
+            start = sub_idx[-2] + 1
+        elif len(sub_idx) == 1:
+            start = max(0, sub_idx[0] - 3)
+        else:
+            start = max(0, len(main_rows) - 6)
+        trail_rows = main_rows[start:]
+        main_rows = main_rows[:start]
+
+    main_html = "".join(main_rows)
+    if force_closing_page:
+        trail_html = "".join(trail_rows)
+        grid_html = (
+            f'<table class="grid">{thead_html}<tbody>{main_html}</tbody></table>'
             f'<div style="page-break-before:always;">'
             f'<table class="grid">{thead_html}'
             f'<tbody class="closing" style="page-break-inside:avoid;">'
-            f"{closing_body}</tbody></table></div>"
+            f"{trail_html}{closing_body}</tbody></table></div>"
         )
     else:
-        closing_tbody = (
-            f'<tbody class="closing" style="page-break-inside:avoid;'
-            f'page-break-before:avoid;">{closing_body}</tbody>'
+        grid_html = (
+            f'<table class="grid">{thead_html}'
+            f'<tbody class="closing">{main_html}{closing_body}</tbody></table>'
         )
-        closing_extra = ""
 
-    return f"""<!DOCTYPE html>
+    # -pdf-keep-with-next en hdr/meta: sin esto xhtml2pdf deja el encabezado
+    # solo en la primera hoja cuando la grilla pasa a la siguiente.
+    html_doc = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
   @page {{
     size: letter landscape;
-    /* Mínimo para que bordes/texto no se corten al imprimir. */
     margin: 2mm;
   }}
   html, body {{
@@ -602,7 +705,7 @@ def _html_informe(payload: dict) -> str:
     font-size: 8.5pt;
     color: #0F2942;
   }}
-  .hdr {{ width: 100%; border-collapse: collapse; margin: 0 0 4pt 0; }}
+  .hdr {{ width: 100%; margin: 0 0 4pt 0; }}
   .hdr td {{
     border: 1pt solid {t1["bg"]};
     background: {t1["bg"]};
@@ -613,10 +716,10 @@ def _html_informe(payload: dict) -> str:
   .hdr .logo {{ width: 18%; text-align: center; background: #FFFFFF; }}
   .hdr .title {{ width: 52%; text-align: center; font-size: 12pt; font-weight: bold; }}
   .hdr .calidad {{ width: 30%; text-align: center; font-size: 8pt; white-space: pre-line; }}
-  .meta {{ width: 100%; border-collapse: collapse; margin: 0 0 4pt 0; font-size: 8pt; }}
+  .meta {{ width: 100%; margin: 0 0 4pt 0; font-size: 8pt; }}
   .meta td {{ border: 0.6pt solid #94A3B8; padding: 4pt 6pt; }}
   .meta .lbl {{ font-weight: bold; background: {t2["bg"]}; color: {t2["text"]}; width: 18%; }}
-  table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7pt; margin: 0; }}
+  table.grid {{ width: 100%; font-size: 7pt; margin: 0; }}
   table.grid th, table.grid td {{
     border: 0.6pt solid #64748B;
     padding: 1.5pt 3pt;
@@ -642,7 +745,7 @@ def _html_informe(payload: dict) -> str:
   .nom {{ font-size: 8.5pt; font-weight: bold; }}
   .cargo {{ font-size: 7.5pt; color: #475569; }}
 </style></head><body>
-<table class="hdr"><tr>
+<table class="hdr" style="-pdf-keep-with-next:true;page-break-after:avoid;"><tr>
   <td class="logo">{logo_html}</td>
   <td class="title">{_esc(fmt.get("titulo") or TITULO_FORMATO_HORAS_EXTRA)}</td>
   <td class="calidad">{_esc(fmt.get("codigo") or CODIGO_FORMATO_HORAS_EXTRA)}
@@ -650,7 +753,7 @@ Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
 {_esc(_fmt_fecha_es(payload.get("fecha_hasta")))}</td>
 </tr></table>
 
-<table class="meta">
+<table class="meta" style="-pdf-keep-with-next:true;page-break-after:avoid;">
 <tr>
   <td class="lbl">Contrato</td>
   <td>{_esc(contrato.get("numero") or "—")}</td>
@@ -667,18 +770,33 @@ Versión {_esc(fmt.get("version") or VERSION_FORMATO_HORAS_EXTRA)}
 </tr>
 </table>
 
-<table class="grid">
-{thead_html}
-{''.join(tbodies)}
-{closing_tbody}
-</table>
-{closing_extra}
+{grid_html}
 </body></html>"""
+    _log.info(
+        "horas_extra html filas=%s body_rows=%s force_closing=%s logo_ms=%.0f html_ms=%.0f",
+        len(filas),
+        len(body_rows),
+        force_closing_page,
+        (t_logo - t0) * 1000,
+        (_time.perf_counter() - t0) * 1000,
+    )
+    return html_doc
 
 
 def generar_pdf_horas_extra(payload: dict) -> bytes:
+    import time as _time
+
+    t0 = _time.perf_counter()
     html_doc = _html_informe(payload)
-    return to_pdf_bytes(html_doc, landscape=True)
+    t1 = _time.perf_counter()
+    pdf = to_pdf_bytes(html_doc, landscape=True)
+    _log.info(
+        "horas_extra pdf html_ms=%.0f pisa_ms=%.0f bytes=%s",
+        (t1 - t0) * 1000,
+        (_time.perf_counter() - t1) * 1000,
+        len(pdf or b""),
+    )
+    return pdf
 
 
 def generar_docx_horas_extra(payload: dict) -> bytes:
@@ -875,6 +993,9 @@ def exportar_informe_horas_extra(
     Returns (bytes, media_type, filename).
     Raises ValueError with user-facing message when empty / invalid.
     """
+    import time as _time
+
+    t0 = _time.perf_counter()
     payload = construir_informe_horas_extra(
         sb,
         contrato_id,
@@ -885,15 +1006,30 @@ def exportar_informe_horas_extra(
         elaborador_id=elaborador_id,
         aprobador_id=aprobador_id,
     )
+    t_payload = _time.perf_counter()
     fmt = str(formato or "pdf").strip().lower()
     d0 = str(fecha_desde)[:10]
     d1 = str(fecha_hasta)[:10]
     if fmt in ("docx", "word", "doc"):
         data = generar_docx_horas_extra(payload)
+        _log.info(
+            "horas_extra export docx contrato=%s filas=%s payload_ms=%.0f total_ms=%.0f",
+            contrato_id,
+            len(payload.get("filas") or []),
+            (t_payload - t0) * 1000,
+            (_time.perf_counter() - t0) * 1000,
+        )
         return (
             data,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             f"{CODIGO_FORMATO_HORAS_EXTRA}_horas_extra_{d0}_{d1}.docx",
         )
     data = generar_pdf_horas_extra(payload)
+    _log.info(
+        "horas_extra export pdf contrato=%s filas=%s payload_ms=%.0f total_ms=%.0f",
+        contrato_id,
+        len(payload.get("filas") or []),
+        (t_payload - t0) * 1000,
+        (_time.perf_counter() - t0) * 1000,
+    )
     return data, "application/pdf", f"{CODIGO_FORMATO_HORAS_EXTRA}_horas_extra_{d0}_{d1}.pdf"
