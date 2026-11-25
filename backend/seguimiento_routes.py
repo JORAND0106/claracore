@@ -1637,6 +1637,10 @@ from bitacora_service import (  # noqa: E402
 )
 from bitacora_pdf import generar_pdf_bitacora_dia  # noqa: E402
 from bitacora_export_rango import exportar_bitacora_rango  # noqa: E402
+from bitacora_horas_extra_export import (  # noqa: E402
+    exportar_informe_horas_extra,
+    opciones_informe_horas_extra,
+)
 from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 
 
@@ -1891,6 +1895,74 @@ def route_bitacora_export_rango(
         raise HTTPException(
             status_code=500,
             detail="No se pudo generar la exportación consolidada de bitácora",
+        ) from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/horas-extra/opciones")
+def route_bitacora_horas_extra_opciones(
+    contrato_id: int,
+    fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    current_user=Depends(get_current_user),
+):
+    """Empresas con personal reportado en el rango + usuarios del contrato."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        return opciones_informe_horas_extra(
+            supabase,
+            contrato_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/horas-extra")
+def route_bitacora_export_horas_extra(
+    contrato_id: int,
+    fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    empresa: str = Query(..., min_length=1, description="Clave o nombre de empresa"),
+    formato: str = Query("pdf", description="pdf | docx"),
+    responsable_id: Optional[int] = Query(None),
+    elaborador_id: Optional[int] = Query(None),
+    aprobador_id: Optional[int] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    """Informe de horas extras del personal (PDF / Word)."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        data, media_type, fname = exportar_informe_horas_extra(
+            supabase,
+            contrato_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            empresa_key=empresa,
+            formato=formato,
+            responsable_id=responsable_id,
+            elaborador_id=elaborador_id,
+            aprobador_id=aprobador_id,
+        )
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.bitacora").exception(
+            "export horas extra bitácora: %s", exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el informe de horas extras",
         ) from exc
 
 

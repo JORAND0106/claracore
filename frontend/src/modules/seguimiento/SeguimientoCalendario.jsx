@@ -589,6 +589,7 @@ export default function SeguimientoCalendario({
           <BitacoraExportRangoBar
             t={t}
             api={api}
+            usuario={usuario}
             variant="inline"
             compact={viewportCompact}
             initialDesde={filtros.fecha_desde}

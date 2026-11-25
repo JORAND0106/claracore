@@ -299,6 +299,7 @@ CODIGO_FORMATO_IDU_FO_EO_04_V2 = "FO-IDU-EO-04-V2"
 # Informe gerencia: comparativo de costo directo (cascada N1–N3) entre dos actas RPO; firmas CCD = acta «presente».
 CODIGO_FORMATO_CCD_CC_GER_001 = "CC-GER-001"
 CODIGO_FORMATO_CCD_CC_BIT_001 = "CC-BIT-001"
+CODIGO_FORMATO_CCD_CC_BIT_HE_001 = "CC-BIT-HE-001"
 
 router = APIRouter(tags=["informes"])
 
@@ -608,6 +609,26 @@ FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
         "slots_firma": [
             {"id": "elaboro", "label": "Residente de obra", "origen": "configuracion"},
             {"id": "reviso", "label": "Director de obra", "origen": "configuracion"},
+        ],
+        "acceso_interventoria": True,
+    },
+    CODIGO_FORMATO_CCD_CC_BIT_HE_001: {
+        "titulo": "Informe de horas extras del personal",
+        "descripcion": (
+            "Informe exportable de tiempo extra del personal reportado en Bitácora "
+            "(por empresa y rango de fechas). Firmas Elaboró / Aprobó."
+        ),
+        "plantilla_html": "bitacora_horas_extra_v1",
+        "motor_pdf": "xhtml2pdf",
+        "layout": {
+            "orientacion": "landscape",
+            "firmas_solo_ultima_hoja": True,
+            "firmas_bloque_inferior": True,
+            "tabla_encabezado_repetido": True,
+        },
+        "slots_firma": [
+            {"id": "elaboro", "label": "Elaboró", "origen": "seleccion_usuario"},
+            {"id": "aprobo", "label": "Aprobó", "origen": "seleccion_usuario"},
         ],
         "acceso_interventoria": True,
     },
