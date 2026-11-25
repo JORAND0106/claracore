@@ -519,6 +519,73 @@ export function createSeguimientoApi(contratoId, token) {
       }
     },
 
+    opcionesBitacoraHorasExtra: (fechaDesde, fechaHasta) => {
+      const d0 = String(fechaDesde || '').slice(0, 10)
+      const d1 = String(fechaHasta || '').slice(0, 10)
+      const q = new URLSearchParams({ fecha_desde: d0, fecha_hasta: d1 })
+      return get(`/seguimiento/${cid}/bitacora/export/horas-extra/opciones?${q.toString()}`, 60000)
+    },
+
+    /**
+     * Informe de horas extras del personal (PDF / Word).
+     * @returns {{ blob: Blob, filename: string }}
+     */
+    exportBitacoraHorasExtraBlob: async ({
+      fechaDesde,
+      fechaHasta,
+      empresa,
+      formato = 'pdf',
+      responsableId,
+      elaboradorId,
+      aprobadorId,
+    } = {}) => {
+      const d0 = String(fechaDesde || '').slice(0, 10)
+      const d1 = String(fechaHasta || '').slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d0) || !/^\d{4}-\d{2}-\d{2}$/.test(d1)) {
+        throw new Error('Indique un rango de fechas válido (desde / hasta)')
+      }
+      const emp = String(empresa || '').trim()
+      if (!emp) throw new Error('Seleccione la empresa a la cual se genera el tiempo extra.')
+      const fmt = String(formato || 'pdf').toLowerCase()
+      if (!['pdf', 'docx'].includes(fmt)) {
+        throw new Error('Formato inválido (use PDF o Word)')
+      }
+      const q = new URLSearchParams({
+        fecha_desde: d0,
+        fecha_hasta: d1,
+        empresa: emp,
+        formato: fmt,
+      })
+      if (responsableId != null && String(responsableId) !== '') q.set('responsable_id', String(responsableId))
+      if (elaboradorId != null && String(elaboradorId) !== '') q.set('elaborador_id', String(elaboradorId))
+      if (aprobadorId != null && String(aprobadorId) !== '') q.set('aprobador_id', String(aprobadorId))
+      const sig = apiFetchSignal(120000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/bitacora/export/horas-extra?${q.toString()}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) {
+          await parseOrThrow(res)
+        }
+        const buf = await res.arrayBuffer()
+        if (!buf || buf.byteLength < 20) throw new Error('El archivo generado está vacío')
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const filename = (m && m[1]) || `horas_extra_${d0}_${d1}.${fmt}`
+        const mime = res.headers.get('Content-Type')
+          || (fmt === 'docx'
+            ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : 'application/pdf')
+        return { blob: new Blob([buf], { type: mime }), filename }
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
+
     exportBitacoraRangoBlob: async (fechaDesde, fechaHasta, formato = 'pdf') => {
       const d0 = String(fechaDesde || '').slice(0, 10)
       const d1 = String(fechaHasta || '').slice(0, 10)

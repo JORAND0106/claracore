@@ -172,6 +172,7 @@ export default function BitacoraPanel({
           <BitacoraExportRangoBar
             t={t}
             api={api}
+            usuario={usuario}
             variant="panel"
             initialDesde={filtros.fecha_desde}
             initialHasta={filtros.fecha_hasta}

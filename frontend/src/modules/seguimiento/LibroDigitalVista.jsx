@@ -917,6 +917,7 @@ export default function LibroDigitalVista({
         <BitacoraExportRangoBar
           t={t}
           api={api}
+          usuario={usuario}
           variant="libro"
           compact
         />

@@ -1,4 +1,6 @@
 import { useCallback, useState } from 'react'
+import { Clock } from 'lucide-react'
+import BitacoraHorasExtraExportModal from './BitacoraHorasExtraExportModal'
 
 function triggerDownload(blob, filename) {
   const url = URL.createObjectURL(blob)
@@ -14,10 +16,12 @@ function triggerDownload(blob, filename) {
 /**
  * Punto de acceso a exportación consolidada de Bitácora por rango.
  * Visible en las pantallas reales (Libro digital / Calendario), no en paneles huérfanos.
+ * Incluye acceso al informe de horas extras (ícono + popup).
  */
 export default function BitacoraExportRangoBar({
   t,
   api,
+  usuario = null,
   visible = true,
   initialDesde = '',
   initialHasta = '',
@@ -29,6 +33,7 @@ export default function BitacoraExportRangoBar({
   const [formato, setFormato] = useState('pdf')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [horasExtraOpen, setHorasExtraOpen] = useState(false)
 
   const exportar = useCallback(async () => {
     if (!api?.exportBitacoraRangoBlob) {
@@ -79,6 +84,20 @@ export default function BitacoraExportRangoBar({
     cursor: busy ? 'wait' : 'pointer',
     fontSize: compact ? 12 : 'var(--cc-sm, 13px)',
     opacity: busy ? 0.75 : 1,
+  }
+  const btnIcon = {
+    width: compact ? 34 : 36,
+    height: compact ? 34 : 36,
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    border: `1px solid ${isLibro ? 'rgba(255,255,255,0.45)' : (t?.border || '#d1d5db')}`,
+    background: isLibro ? 'rgba(255,255,255,0.18)' : (t?.bg || '#fff'),
+    color: isLibro ? '#fff' : (t?.text || '#111'),
+    cursor: 'pointer',
+    flex: '0 0 auto',
   }
   const labelStyle = {
     display: 'flex',
@@ -162,6 +181,16 @@ export default function BitacoraExportRangoBar({
         >
           {busy ? 'Exportando…' : 'Exportar rango'}
         </button>
+        <button
+          type="button"
+          onClick={() => setHorasExtraOpen(true)}
+          style={btnIcon}
+          title="Informe de horas extras del personal"
+          aria-label="Informe de horas extras del personal"
+          data-testid="bitacora-horas-extra-btn"
+        >
+          <Clock size={compact ? 16 : 18} strokeWidth={2.2} aria-hidden />
+        </button>
       </div>
       {error ? (
         <div
@@ -179,6 +208,16 @@ export default function BitacoraExportRangoBar({
           {error}
         </div>
       ) : null}
+
+      <BitacoraHorasExtraExportModal
+        open={horasExtraOpen}
+        onClose={() => setHorasExtraOpen(false)}
+        t={t}
+        api={api}
+        usuario={usuario}
+        initialDesde={fechaDesde}
+        initialHasta={fechaHasta}
+      />
     </div>
   )
 }
