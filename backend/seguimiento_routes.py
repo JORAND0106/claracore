@@ -1641,6 +1641,10 @@ from bitacora_horas_extra_export import (  # noqa: E402
     exportar_informe_horas_extra,
     opciones_informe_horas_extra,
 )
+from bitacora_informe_presencia import (  # noqa: E402
+    exportar_informe_presencia,
+    opciones_informe_presencia,
+)
 from bitacora_permissions import require_permiso_bitacora  # noqa: E402
 
 
@@ -1965,6 +1969,74 @@ def route_bitacora_export_horas_extra(
         raise HTTPException(
             status_code=500,
             detail="No se pudo generar el informe de horas extras",
+        ) from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/presencia/opciones")
+def route_bitacora_presencia_opciones(
+    contrato_id: int,
+    tipo: str = Query(..., description="personal | maquinaria"),
+    fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    empresa: Optional[str] = Query(None, description="Clave/nombre empresa → filas preview"),
+    current_user=Depends(get_current_user),
+):
+    """Empresas + grilla preview (asistencia personal o maquinaria)."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        return opciones_informe_presencia(
+            supabase,
+            contrato_id,
+            tipo=tipo,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            empresa_key=empresa,
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+
+
+@router.get("/{contrato_id}/bitacora/export/presencia")
+def route_bitacora_export_presencia(
+    contrato_id: int,
+    tipo: str = Query(..., description="personal | maquinaria"),
+    fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    empresa: str = Query(..., min_length=1, description="Clave o nombre de empresa"),
+    formato: str = Query("pdf", description="pdf | docx"),
+    current_user=Depends(get_current_user),
+):
+    """Informe consolidado de asistencia de personal o presencia de maquinaria."""
+    require_permiso_bitacora(current_user, "exportar", contrato_id)
+    _check_contrato(current_user, contrato_id)
+    try:
+        data, media_type, fname = exportar_informe_presencia(
+            supabase,
+            contrato_id,
+            tipo=tipo,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            empresa_key=empresa,
+            formato=formato,
+        )
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except ValueError as exc:
+        raise _http_value_error(exc) from exc
+    except Exception as exc:
+        logging.getLogger("claracore.bitacora").exception(
+            "export presencia bitácora: %s", exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo generar el informe de presencia",
         ) from exc
 
 
