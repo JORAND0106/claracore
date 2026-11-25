@@ -451,6 +451,7 @@ export default function PersonalCargoDetalleModal({
                   const locked = disabled || (row.rrhh_trabajador_id != null && !!row.nombre)
                   const enriched = enriquecerAsistenciaConHorasExtra(row, { horario, fechaISO })
                   const extra = Number(enriched.horas_extra) || 0
+                  const etiquetaExtra = enriched.etiqueta_especial || null
                   return (
                     <tr key={`cargo-${row.rrhh_trabajador_id || row.nombre}-${index}`}>
                       <td style={ui.td} data-label="Nombre">
@@ -562,7 +563,24 @@ export default function PersonalCargoDetalleModal({
                         )}
                       </td>
                       <td style={{ ...ui.td, textAlign: 'center', fontWeight: 700 }} data-label="Hrs extra">
-                        {formatoHorasDecimal(extra)}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                          <span>{formatoHorasDecimal(extra)}</span>
+                          {etiquetaExtra ? (
+                            <span
+                              style={{
+                                fontSize: 'var(--cc-caption, 10px)',
+                                fontWeight: 700,
+                                color: t.primary || '#0077B6',
+                                letterSpacing: '0.02em',
+                              }}
+                              title={etiquetaExtra === 'Festivo'
+                                ? 'Festivo oficial de Colombia: todo el tiempo trabajado es extra'
+                                : 'Domingo: todo el tiempo trabajado es extra'}
+                            >
+                              {etiquetaExtra}
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                       <td style={ui.td} data-label="Justificación">
                         {extra > 0 ? (

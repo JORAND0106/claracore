@@ -877,7 +877,7 @@ def _html_asistencia_colaboradores(
     rows_in = (diario or {}).get("asistencia_colaboradores") or []
     if not isinstance(rows_in, list) or not rows_in:
         return ""
-    from bitacora_horario import calcular_horas_extra
+    from bitacora_horario import calcular_horas_extra, etiqueta_dia_especial
 
     rows = []
     total_extra = 0.0
@@ -900,13 +900,18 @@ def _html_asistencia_colaboradores(
         )
         total_extra += extra_h
         justif = _justificacion_asistencia_pdf(a, extra_h=extra_h)
+        extra_txt = _formato_horas_extra_pdf(extra_h)
+        if extra_h > 0:
+            etiq = etiqueta_dia_especial(fecha_calc, horario)
+            if etiq:
+                extra_txt = f"{extra_txt} ({etiq})"
         rows.append([
             _esc(nombre),
             _esc(cargo),
             _esc(empresa),
             _esc(ini or "—"),
             _esc(fin or "—"),
-            _esc(_formato_horas_extra_pdf(extra_h)),
+            _esc(extra_txt),
             _esc(justif),
         ])
     if not rows:

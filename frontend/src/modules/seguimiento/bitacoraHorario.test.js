@@ -5,12 +5,14 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   calcularHorasExtra,
+  etiquetaDiaEspecial,
   horasLaborablesDia,
   horasPrecargaDesdeHorario,
   horasSemanales,
   horarioDefault,
   keyDiaDesdeFechaISO,
   normalizeHorario,
+  tieneJornadaOrdinaria,
 } from './bitacoraHorario.js'
 
 describe('bitacoraHorario', () => {
@@ -89,6 +91,56 @@ describe('bitacoraHorario', () => {
         fechaISO: '2026-11-08', // domingo
       }),
       4,
+    )
+  })
+
+  it('festivo lunes (16/11/2026): 08:00–11:00 → 3.00 extra festivo', () => {
+    const h = horarioDefault()
+    assert.equal(tieneJornadaOrdinaria(h, '2026-11-16'), false)
+    assert.equal(etiquetaDiaEspecial('2026-11-16', h), 'Festivo')
+    assert.equal(
+      calcularHorasExtra({
+        hora_ingreso: '08:00',
+        hora_salida: '11:00',
+        horario: h,
+        fechaISO: '2026-11-16',
+      }),
+      3,
+    )
+    // Lunes ordinario no festivo: dentro de jornada → 0
+    assert.equal(
+      calcularHorasExtra({
+        hora_ingreso: '08:00',
+        hora_salida: '11:00',
+        horario: h,
+        fechaISO: '2026-11-09',
+      }),
+      0,
+    )
+  })
+
+  it('domingo laborable en contrato respeta jornada ordinaria', () => {
+    const h = normalizeHorario({
+      dias: {
+        dom: {
+          laborable: true,
+          entrada: '08:00',
+          salida: '12:00',
+          almuerzo_inicio: '',
+          almuerzo_fin: '',
+        },
+      },
+    })
+    assert.equal(tieneJornadaOrdinaria(h, '2026-11-08'), true)
+    assert.equal(etiquetaDiaEspecial('2026-11-08', h), null)
+    assert.equal(
+      calcularHorasExtra({
+        hora_ingreso: '08:00',
+        hora_salida: '12:00',
+        horario: h,
+        fechaISO: '2026-11-08',
+      }),
+      0,
     )
   })
 })

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 BOGOTA = ZoneInfo("America/Bogota")
 
+# Import diferido evitado: prog_obra_calendar solo para festivos CO.
+
 DIAS_SEMANA = ("lun", "mar", "mie", "jue", "vie", "sab", "dom")
 # date.weekday(): Monday=0 … Sunday=6
 _WEEKDAY_TO_KEY = {
@@ -160,16 +162,73 @@ def dia_horario_para_fecha(horario: Any, fecha: Any) -> Dict[str, Any]:
     return h["dias"].get(key) or _empty_no_laborable()
 
 
+def _parse_fecha(fecha: Any) -> Optional[date]:
+    if isinstance(fecha, date):
+        return fecha
+    s = str(fecha or "")[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def es_festivo_oficial_co(fecha: Any) -> bool:
+    """Festivo oficial de Colombia (mismo cálculo que el calendario de Seguimiento)."""
+    d = _parse_fecha(fecha)
+    if not d:
+        return False
+    try:
+        from prog_obra_calendar import festivos_colombia_año
+    except Exception:
+        return False
+    return d in festivos_colombia_año(d.year)
+
+
+def etiqueta_dia_especial(fecha: Any, horario: Any = None) -> Optional[str]:
+    """
+    Etiqueta breve para UI junto a Hrs extra: ``Festivo`` o ``Domingo``.
+    Domingo con jornada ordinaria en el contrato no etiqueta (se trata como ordinario).
+    """
+    d = _parse_fecha(fecha)
+    if not d:
+        return None
+    if es_festivo_oficial_co(d):
+        return "Festivo"
+    if d.weekday() == 6:
+        dia = dia_horario_para_fecha(horario, d)
+        if dia.get("laborable"):
+            return None
+        return "Domingo"
+    return None
+
+
+def tiene_jornada_ordinaria(horario: Any, fecha: Any) -> bool:
+    """
+    False en festivo oficial CO (aunque el día de la semana sea laborable).
+    En domingo: solo True si el contrato marca domingo como laborable.
+    En días ordinarios: según el horario del contrato.
+    """
+    d = _parse_fecha(fecha)
+    if d and es_festivo_oficial_co(d):
+        return False
+    dia = dia_horario_para_fecha(horario, fecha)
+    return bool(dia.get("laborable"))
+
+
 def horas_precarga(horario: Any, fecha: Any) -> Dict[str, Any]:
     dia = dia_horario_para_fecha(horario, fecha)
-    if not dia.get("laborable"):
+    etiqueta = etiqueta_dia_especial(fecha, horario)
+    if not tiene_jornada_ordinaria(horario, fecha):
+        # Sin jornada ordinaria: no descontar almuerzo del contrato (todo el
+        # tiempo de reloj trabajado cuenta como extra).
         return {
             "hora_ingreso": HORA_INGRESO_DEFAULT,
             "hora_salida": HORA_SALIDA_DEFAULT,
             "laborable": False,
-            "almuerzo_inicio": str(dia.get("almuerzo_inicio") or ""),
-            "almuerzo_fin": str(dia.get("almuerzo_fin") or ""),
+            "almuerzo_inicio": "",
+            "almuerzo_fin": "",
             "horas_jornada": 0.0,
+            "etiqueta_especial": etiqueta,
         }
     return {
         "hora_ingreso": str(dia.get("entrada") or HORA_INGRESO_DEFAULT)[:5],
@@ -178,6 +237,7 @@ def horas_precarga(horario: Any, fecha: Any) -> Dict[str, Any]:
         "almuerzo_inicio": str(dia.get("almuerzo_inicio") or ""),
         "almuerzo_fin": str(dia.get("almuerzo_fin") or ""),
         "horas_jornada": horas_laborables_dia(dia),
+        "etiqueta_especial": None,
     }
 
 
