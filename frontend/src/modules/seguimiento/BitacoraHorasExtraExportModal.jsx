@@ -1,8 +1,10 @@
 /**
- * Popup institucional: configurar e exportar informe de horas extras (PDF/Word).
+ * Popup institucional: informe de horas extras con grilla previa y descarga PDF/Word.
+ * Abierto desde la barra principal de Seguimiento (no desde cada día).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Download, X } from 'lucide-react'
 import CcConfirmModal from '../../components/CcConfirmModal'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 
@@ -26,6 +28,12 @@ function defaultRango() {
   return { desde, hasta }
 }
 
+function fmtExtra(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '—'
+  return v.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+}
+
 export default function BitacoraHorasExtraExportModal({
   open = false,
   onClose,
@@ -45,7 +53,8 @@ export default function BitacoraHorasExtraExportModal({
   const [formato, setFormato] = useState('pdf')
   const [empresas, setEmpresas] = useState([])
   const [usuarios, setUsuarios] = useState([])
-  const [loadingOpts, setLoadingOpts] = useState(false)
+  const [filas, setFilas] = useState([])
+  const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [aviso, setAviso] = useState(null)
 
@@ -54,25 +63,32 @@ export default function BitacoraHorasExtraExportModal({
   const muted = t?.textMuted || '#64748b'
   const inputBg = t?.inputBg || '#f8fafc'
   const primary = t?.primary || '#0077B6'
+  const bgCard = t?.bgCard || '#fff'
+  const headBg = t?.primary
+    ? `color-mix(in srgb, ${primary} 18%, ${bgCard})`
+    : '#e2e8f0'
 
-  // Preseleccionar elaborador = usuario actual
   useEffect(() => {
     if (!open) return
     const uid = usuario?.id != null ? String(usuario.id) : ''
     if (uid) setElaboradorId((prev) => prev || uid)
   }, [open, usuario?.id])
 
+  // Carga empresas/usuarios/filas al cambiar periodo o empresa
   useEffect(() => {
     if (!open) return undefined
     if (!api?.opcionesBitacoraHorasExtra) return undefined
     const d0 = String(fechaDesde || '').slice(0, 10)
     const d1 = String(fechaHasta || '').slice(0, 10)
-    if (!d0 || !d1 || d1 < d0) return undefined
+    if (!d0 || !d1 || d1 < d0) {
+      setFilas([])
+      return undefined
+    }
     let cancelled = false
-    setLoadingOpts(true)
+    setLoading(true)
     ;(async () => {
       try {
-        const data = await api.opcionesBitacoraHorasExtra(d0, d1)
+        const data = await api.opcionesBitacoraHorasExtra(d0, d1, empresaKey || undefined)
         if (cancelled) return
         const emps = Array.isArray(data?.empresas) ? data.empresas : []
         const us = Array.isArray(data?.usuarios) ? data.usuarios : []
@@ -88,7 +104,7 @@ export default function BitacoraHorasExtraExportModal({
         })
         setAprobadorId((prev) => {
           if (prev && us.some((u) => String(u.id) === String(prev))) return prev
-          return ''
+          return prev || ''
         })
         setElaboradorId((prev) => {
           if (prev && us.some((u) => String(u.id) === String(prev))) return prev
@@ -96,45 +112,33 @@ export default function BitacoraHorasExtraExportModal({
           if (uid != null && us.some((u) => String(u.id) === String(uid))) return String(uid)
           return us[0]?.id != null ? String(us[0].id) : ''
         })
+        // Filas solo vienen cuando la petición incluyó empresa.
+        if (empresaKey) {
+          setFilas(Array.isArray(data?.filas) ? data.filas : [])
+        } else {
+          setFilas([])
+        }
       } catch (e) {
         if (!cancelled) {
+          setFilas([])
           setAviso({
-            titulo: 'No se pudieron cargar opciones',
+            titulo: 'No se pudieron cargar datos',
             mensaje: e?.message || 'Intente de nuevo en unos momentos.',
           })
         }
       } finally {
-        if (!cancelled) setLoadingOpts(false)
+        if (!cancelled) setLoading(false)
       }
     })()
     return () => { cancelled = true }
-  }, [open, api, fechaDesde, fechaHasta, usuario?.id])
+  }, [open, api, fechaDesde, fechaHasta, empresaKey, usuario?.id])
+
+  const puedeDescargar = filas.length > 0 && !!empresaKey && !loading && !busy
 
   const exportar = useCallback(async () => {
-    if (!api?.exportBitacoraHorasExtraBlob) {
-      setAviso({
-        titulo: 'Exportación no disponible',
-        mensaje: 'La exportación de horas extras no está disponible en esta sesión.',
-      })
-      return
-    }
+    if (!puedeDescargar || !api?.exportBitacoraHorasExtraBlob) return
     const d0 = String(fechaDesde || '').slice(0, 10)
     const d1 = String(fechaHasta || '').slice(0, 10)
-    if (!d0 || !d1) {
-      setAviso({ titulo: 'Fechas incompletas', mensaje: 'Indique el rango de fechas del informe.' })
-      return
-    }
-    if (d1 < d0) {
-      setAviso({ titulo: 'Rango inválido', mensaje: 'La fecha Hasta debe ser posterior o igual a Desde.' })
-      return
-    }
-    if (!empresaKey) {
-      setAviso({
-        titulo: 'Empresa requerida',
-        mensaje: 'Seleccione la empresa a la cual se genera el tiempo extra.',
-      })
-      return
-    }
     setBusy(true)
     setAviso(null)
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -150,27 +154,20 @@ export default function BitacoraHorasExtraExportModal({
       })
       triggerDownload(blob, filename)
       const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
-      if (ms > 15000) {
-        // Evidencia de rendimiento: si tarda, al menos no se queda colgado (busy se limpia).
-        console.info('[Bitácora] Informe horas extras generado en', ms, 'ms')
-      } else {
-        console.info('[Bitácora] Informe horas extras OK', ms, 'ms')
-      }
+      console.info('[Bitácora] Informe horas extras OK', ms, 'ms', 'filas', filas.length)
       onClose?.()
     } catch (e) {
       const msg = e?.message || 'No se pudo generar el informe.'
       setAviso({
-        titulo: 'Sin tiempo extra',
-        mensaje: /tiempo extra|empresa|rango/i.test(msg)
-          ? msg
-          : 'No hay tiempo extra para el rango y la empresa seleccionados, o la descarga falló.',
+        titulo: 'No se pudo descargar',
+        mensaje: msg,
       })
     } finally {
       setBusy(false)
     }
   }, [
-    api, fechaDesde, fechaHasta, empresaKey, formato,
-    responsableId, elaboradorId, aprobadorId, onClose,
+    puedeDescargar, api, fechaDesde, fechaHasta, empresaKey, formato,
+    responsableId, elaboradorId, aprobadorId, onClose, filas.length,
   ])
 
   if (!open) return null
@@ -178,7 +175,7 @@ export default function BitacoraHorasExtraExportModal({
   const field = {
     width: '100%',
     boxSizing: 'border-box',
-    padding: '8px 10px',
+    padding: '7px 9px',
     borderRadius: 8,
     border: `1px solid ${border}`,
     background: inputBg,
@@ -188,17 +185,33 @@ export default function BitacoraHorasExtraExportModal({
   const label = {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    fontSize: 12,
+    gap: 3,
+    fontSize: 11,
     fontWeight: 700,
     color: muted,
+    minWidth: 0,
   }
+  const iconBtn = (enabled) => ({
+    width: 36,
+    height: 36,
+    padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    border: `1px solid ${enabled ? primary : border}`,
+    background: enabled ? primary : inputBg,
+    color: enabled ? '#fff' : muted,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    opacity: enabled ? 1 : 0.55,
+  })
 
   const overlay = (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Informe de horas extras"
+      data-testid="bitacora-horas-extra-modal"
       style={{
         position: 'fixed',
         inset: 0,
@@ -207,87 +220,111 @@ export default function BitacoraHorasExtraExportModal({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: 12,
       }}
       onClick={onClose}
     >
       <div
         style={{
-          width: 'min(560px, 100%)',
-          maxHeight: '92vh',
-          overflow: 'auto',
-          background: t?.bgCard || '#fff',
+          width: 'min(980px, 100%)',
+          maxHeight: '94vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: bgCard,
           borderRadius: 16,
           border: `1px solid ${border}`,
           boxShadow: '0 24px 80px rgba(0,0,0,0.28)',
+          overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <CcModalBrandHeader theme={t} />
-        <div style={{ padding: '14px 18px 18px' }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 17, color: text }}>
+        <div style={{ padding: '10px 14px 6px', flex: '0 0 auto' }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 'var(--cc-title, 16px)', color: text }}>
             Informe de horas extras
           </h2>
-          <p style={{ margin: '0 0 14px', fontSize: 12, color: muted, lineHeight: 1.4 }}>
-            Configure el rango, la empresa y los firmantes. Solo se incluyen trabajadores
-            con tiempo extra en el periodo.
-          </p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label style={label}>
-              Desde
-              <input type="date" value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} style={field} />
+          {/* Parte superior: Empresa | Desde | Hasta */}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+            }}
+          >
+            <label style={{ ...label, flex: '1 1 160px' }}>
+              Empresa
+              <select
+                value={empresaKey}
+                onChange={(e) => setEmpresaKey(e.target.value)}
+                style={field}
+                disabled={loading || busy}
+                aria-label="Empresa tiempo extra"
+              >
+                {!empresas.length ? (
+                  <option value="">Sin empresas con personal en el periodo</option>
+                ) : null}
+                {empresas.map((e) => (
+                  <option key={e.key} value={e.key}>{e.nombre}</option>
+                ))}
+              </select>
             </label>
-            <label style={label}>
-              Hasta
-              <input type="date" value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} style={field} />
+            <label style={{ ...label, flex: '1 1 120px' }}>
+              Fecha de inicio
+              <input
+                type="date"
+                value={fechaDesde}
+                onChange={(e) => setFechaDesde(e.target.value)}
+                style={field}
+                aria-label="Fecha inicio periodo horas extras"
+              />
+            </label>
+            <label style={{ ...label, flex: '1 1 120px' }}>
+              Fecha de fin
+              <input
+                type="date"
+                value={fechaHasta}
+                onChange={(e) => setFechaHasta(e.target.value)}
+                style={field}
+                aria-label="Fecha fin periodo horas extras"
+              />
             </label>
           </div>
 
-          <label style={{ ...label, marginTop: 10 }}>
-            Empresa (tiempo extra)
-            <select
-              value={empresaKey}
-              onChange={(e) => setEmpresaKey(e.target.value)}
-              style={field}
-              disabled={loadingOpts || busy}
-            >
-              {!empresas.length ? (
-                <option value="">Sin empresas con personal en el rango</option>
-              ) : null}
-              {empresas.map((e) => (
-                <option key={e.key} value={e.key}>{e.nombre}</option>
-              ))}
-            </select>
-          </label>
-
-          <label style={{ ...label, marginTop: 10 }}>
-            Responsable de obra
-            <select
-              value={responsableId}
-              onChange={(e) => setResponsableId(e.target.value)}
-              style={field}
-              disabled={loadingOpts || busy}
-            >
-              <option value="">— Seleccione —</option>
-              {usuarios.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.nombre}{u.cargo ? ` · ${u.cargo}` : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-            <label style={label}>
+          {/* Firmantes + formato en una línea compacta */}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginTop: 8,
+            }}
+          >
+            <label style={{ ...label, flex: '1 1 140px' }}>
+              Responsable de obra
+              <select
+                value={responsableId}
+                onChange={(e) => setResponsableId(e.target.value)}
+                style={field}
+                disabled={loading || busy}
+              >
+                <option value="">—</option>
+                {usuarios.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.nombre}{u.cargo ? ` · ${u.cargo}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ ...label, flex: '1 1 140px' }}>
               Elaborador
               <select
                 value={elaboradorId}
                 onChange={(e) => setElaboradorId(e.target.value)}
                 style={field}
-                disabled={loadingOpts || busy}
+                disabled={loading || busy}
               >
-                <option value="">— Seleccione —</option>
+                <option value="">—</option>
                 {usuarios.map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.nombre}{u.cargo ? ` · ${u.cargo}` : ''}
@@ -295,15 +332,15 @@ export default function BitacoraHorasExtraExportModal({
                 ))}
               </select>
             </label>
-            <label style={label}>
+            <label style={{ ...label, flex: '1 1 140px' }}>
               Aprobador
               <select
                 value={aprobadorId}
                 onChange={(e) => setAprobadorId(e.target.value)}
                 style={field}
-                disabled={loadingOpts || busy}
+                disabled={loading || busy}
               >
-                <option value="">— Seleccione —</option>
+                <option value="">—</option>
                 {usuarios.map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.nombre}{u.cargo ? ` · ${u.cargo}` : ''}
@@ -311,51 +348,133 @@ export default function BitacoraHorasExtraExportModal({
                 ))}
               </select>
             </label>
+            <label style={{ ...label, flex: '0 1 110px' }}>
+              Formato
+              <select
+                value={formato}
+                onChange={(e) => setFormato(e.target.value)}
+                style={field}
+                disabled={busy}
+                aria-label="Formato de descarga"
+              >
+                <option value="pdf">PDF</option>
+                <option value="docx">Word</option>
+              </select>
+            </label>
           </div>
+        </div>
 
-          <label style={{ ...label, marginTop: 10 }}>
-            Formato
-            <select value={formato} onChange={(e) => setFormato(e.target.value)} style={field} disabled={busy}>
-              <option value="pdf">PDF</option>
-              <option value="docx">Word (.docx)</option>
-            </select>
-          </label>
-
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={busy}
+        {/* Parte central: grilla */}
+        <div
+          style={{
+            flex: '1 1 auto',
+            minHeight: 180,
+            maxHeight: 'min(52vh, 420px)',
+            overflow: 'auto',
+            margin: '4px 14px 0',
+            border: `1px solid ${border}`,
+            borderRadius: 10,
+            background: bgCard,
+          }}
+        >
+          {loading ? (
+            <div style={{ padding: 24, textAlign: 'center', color: muted, fontSize: 13 }}>
+              Cargando horas extras…
+            </div>
+          ) : !filas.length ? (
+            <div
+              role="status"
+              style={{ padding: 24, textAlign: 'center', color: muted, fontSize: 13, lineHeight: 1.45 }}
+            >
+              No hay horas extras para la empresa y el periodo elegidos.
+            </div>
+          ) : (
+            <table
+              data-testid="bitacora-horas-extra-grid"
               style={{
-                padding: '8px 14px',
-                borderRadius: 8,
-                border: `1px solid ${border}`,
-                background: inputBg,
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: 'var(--cc-sm, 12px)',
                 color: text,
-                fontWeight: 700,
-                cursor: busy ? 'wait' : 'pointer',
               }}
             >
-              Cancelar
-            </button>
-            <button
-              type="button"
-              onClick={() => void exportar()}
-              disabled={busy || loadingOpts || !empresaKey}
-              style={{
-                padding: '8px 14px',
-                borderRadius: 8,
-                border: 'none',
-                background: primary,
-                color: '#fff',
-                fontWeight: 700,
-                cursor: busy || loadingOpts || !empresaKey ? 'not-allowed' : 'pointer',
-                opacity: busy || loadingOpts || !empresaKey ? 0.65 : 1,
-              }}
-            >
-              {busy ? 'Generando…' : (loadingOpts ? 'Cargando…' : 'Exportar')}
-            </button>
-          </div>
+              <thead>
+                <tr>
+                  {['No', 'Nombre colaborador', 'No. Documento', 'Fecha', 'Hora inicio', 'Hora fin', 'Tiempo extra', 'Observación'].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 1,
+                        background: headBg,
+                        border: `1px solid ${border}`,
+                        padding: '7px 8px',
+                        textAlign: 'left',
+                        fontWeight: 800,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map((r, i) => (
+                  <tr key={`${r.fecha}-${r.documento}-${r.nombre}-${i}`}>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{i + 1}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.nombre}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.documento}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px', whiteSpace: 'nowrap' }}>{r.fecha}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.hora_inicio}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.hora_fin}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px', fontWeight: 700 }}>{fmtExtra(r.tiempo_extra)}</td>
+                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.observacion || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Pie: descargar | cancelar */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            padding: '12px 14px 14px',
+            flex: '0 0 auto',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => void exportar()}
+            disabled={!puedeDescargar}
+            style={iconBtn(puedeDescargar)}
+            title={puedeDescargar ? (busy ? 'Generando…' : `Descargar ${formato === 'docx' ? 'Word' : 'PDF'}`) : 'Sin filas para descargar'}
+            aria-label={puedeDescargar ? 'Descargar informe' : 'Descarga inactiva'}
+            data-testid="bitacora-horas-extra-download"
+          >
+            <Download size={18} strokeWidth={2.3} aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            style={{
+              ...iconBtn(true),
+              background: inputBg,
+              color: text,
+              border: `1px solid ${border}`,
+            }}
+            title="Cancelar"
+            aria-label="Cancelar"
+          >
+            <X size={18} strokeWidth={2.3} aria-hidden />
+          </button>
         </div>
       </div>
     </div>

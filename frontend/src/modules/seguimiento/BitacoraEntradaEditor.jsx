@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clock, Download, Eye, Image as ImageIcon, Table2, Trash2, X } from 'lucide-react'
+import { Download, Eye, Image as ImageIcon, Table2, Trash2, X } from 'lucide-react'
 import CcConfirmModal from '../../components/CcConfirmModal'
 import CcModalBrandHeader from '../../components/CcModalBrandHeader'
 import { downloadInformePeriodicoBlob } from '../../utils/informePeriodicoCapture'
@@ -15,7 +15,6 @@ import MaterialTipoCatalogSelect from './MaterialTipoCatalogSelect'
 import NombreRrhhAutocomplete from './NombreRrhhAutocomplete'
 import PersonalAsistenciaPanel from './PersonalAsistenciaPanel'
 import BitacoraReportePersonalModal from './BitacoraReportePersonalModal'
-import BitacoraHorasExtraExportModal from './BitacoraHorasExtraExportModal'
 import BitacoraReporteDiarioPngCapture from './BitacoraReporteDiarioPngCapture'
 import {
   nombreArchivoBitacoraPng,
@@ -326,7 +325,6 @@ export default function BitacoraEntradaEditor({
   const [pdfUrl, setPdfUrl] = useState(null)
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [reportePersonalOpen, setReportePersonalOpen] = useState(false)
-  const [horasExtraOpen, setHorasExtraOpen] = useState(false)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   const [autoAviso, setAutoAviso] = useState(null)
   const [pngAviso, setPngAviso] = useState(null)
@@ -1166,17 +1164,6 @@ export default function BitacoraEntradaEditor({
                   aria-label={pdfBusy ? 'Generando PDF…' : 'Descargar PDF'}
                 >
                   <Download size={iconSz} strokeWidth={2.2} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setHorasExtraOpen(true)}
-                  style={btnIcon({ disabled: busy })}
-                  title="Informe de horas extras del personal"
-                  aria-label="Informe de horas extras del personal"
-                  data-testid="bitacora-horas-extra-btn"
-                >
-                  <Clock size={iconSz} strokeWidth={2.2} aria-hidden />
                 </button>
               </>
             )}
@@ -2337,16 +2324,6 @@ export default function BitacoraEntradaEditor({
         contratoId={contratoId}
         token={token}
         contratoMeta={contratoMeta}
-      />
-
-      <BitacoraHorasExtraExportModal
-        open={horasExtraOpen}
-        onClose={() => setHorasExtraOpen(false)}
-        t={t}
-        api={api}
-        usuario={usuario}
-        initialDesde={fecha}
-        initialHasta={fecha}
       />
 
       {pdfPreviewOpen && pdfUrl && (

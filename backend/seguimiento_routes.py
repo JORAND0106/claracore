@@ -1903,9 +1903,10 @@ def route_bitacora_horas_extra_opciones(
     contrato_id: int,
     fecha_desde: str = Query(..., min_length=8, description="YYYY-MM-DD"),
     fecha_hasta: str = Query(..., min_length=8, description="YYYY-MM-DD"),
+    empresa: Optional[str] = Query(None, description="Clave/nombre empresa → filas preview"),
     current_user=Depends(get_current_user),
 ):
-    """Empresas con personal reportado en el rango + usuarios del contrato."""
+    """Empresas + usuarios; con empresa, también la grilla de horas extras."""
     require_permiso_bitacora(current_user, "exportar", contrato_id)
     _check_contrato(current_user, contrato_id)
     try:
@@ -1914,6 +1915,7 @@ def route_bitacora_horas_extra_opciones(
             contrato_id,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
+            empresa_key=empresa,
         )
     except ValueError as exc:
         raise _http_value_error(exc) from exc

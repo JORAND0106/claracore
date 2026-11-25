@@ -519,10 +519,12 @@ export function createSeguimientoApi(contratoId, token) {
       }
     },
 
-    opcionesBitacoraHorasExtra: (fechaDesde, fechaHasta) => {
+    opcionesBitacoraHorasExtra: (fechaDesde, fechaHasta, empresa) => {
       const d0 = String(fechaDesde || '').slice(0, 10)
       const d1 = String(fechaHasta || '').slice(0, 10)
       const q = new URLSearchParams({ fecha_desde: d0, fecha_hasta: d1 })
+      const emp = String(empresa || '').trim()
+      if (emp) q.set('empresa', emp)
       return get(`/seguimiento/${cid}/bitacora/export/horas-extra/opciones?${q.toString()}`, 60000)
     },
 
