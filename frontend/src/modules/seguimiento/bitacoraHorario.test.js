@@ -17,9 +17,17 @@ describe('bitacoraHorario', () => {
   it('default Lun–Vie 8h (con almuerzo) y 40h semanales', () => {
     const h = horarioDefault('2026-11-10')
     assert.equal(h.vigente_desde, '2026-11-10')
+    assert.equal(h.nocturno_inicio, '19:00')
+    assert.equal(h.nocturno_fin, '06:00')
     assert.equal(horasLaborablesDia(h.dias.lun), 8)
     assert.equal(horasLaborablesDia(h.dias.sab), 0)
     assert.equal(horasSemanales(h), 40)
+  })
+
+  it('normaliza franja nocturna del contrato', () => {
+    const h = normalizeHorario({ nocturno_inicio: '21:00', nocturno_fin: '05:00' })
+    assert.equal(h.nocturno_inicio, '21:00')
+    assert.equal(h.nocturno_fin, '05:00')
   })
 
   it('sábado media jornada sin almuerzo', () => {

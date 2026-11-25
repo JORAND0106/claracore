@@ -30,9 +30,24 @@ function defaultRango() {
 
 function fmtExtra(n) {
   const v = Number(n)
-  if (!Number.isFinite(v)) return '—'
+  if (!Number.isFinite(v) || v <= 0) return ''
   return v.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
 }
+
+const HEADERS_HE = [
+  'No',
+  'Nombre colaborador',
+  'No. Documento',
+  'Fecha',
+  'Hora inicio',
+  'Hora fin',
+  'Extra diurna',
+  'Extra nocturna',
+  'Extra festiva diurna',
+  'Extra festiva nocturna',
+  'Total tiempo extra',
+  'Observación',
+]
 
 export default function BitacoraHorasExtraExportModal({
   open = false,
@@ -403,7 +418,7 @@ export default function BitacoraHorasExtraExportModal({
             >
               <thead>
                 <tr>
-                  {['No', 'Nombre colaborador', 'No. Documento', 'Fecha', 'Hora inicio', 'Hora fin', 'Tiempo extra', 'Observación'].map((h) => (
+                  {HEADERS_HE.map((h) => (
                     <th
                       key={h}
                       style={{
@@ -412,10 +427,11 @@ export default function BitacoraHorasExtraExportModal({
                         zIndex: 1,
                         background: headBg,
                         border: `1px solid ${border}`,
-                        padding: '4px 6px',
+                        padding: '3px 4px',
                         textAlign: 'left',
                         fontWeight: 800,
                         whiteSpace: 'nowrap',
+                        fontSize: 'calc(var(--cc-sm, 12px) - 3px)',
                       }}
                     >
                       {h}
@@ -436,23 +452,28 @@ export default function BitacoraHorasExtraExportModal({
                   const rowColor = isTot ? '#fff' : text
                   const cell = {
                     border: `1px solid ${border}`,
-                    padding: '3px 6px',
+                    padding: '2px 4px',
                     fontWeight: (isSub || isTot) ? 800 : 400,
                     color: rowColor,
                     background: rowBg,
+                    whiteSpace: 'nowrap',
                   }
                   return (
                     <tr key={`${tipo}-${r.fecha}-${r.documento}-${r.nombre}-${i}`}>
                       <td style={cell}>{isSub || isTot ? '' : (r.no ?? '')}</td>
-                      <td style={cell}>
+                      <td style={{ ...cell, whiteSpace: 'normal' }}>
                         {isSub ? `Subtotal · ${r.nombre || ''}` : isTot ? 'Total general' : r.nombre}
                       </td>
                       <td style={cell}>{isTot ? '' : (r.documento || '')}</td>
-                      <td style={{ ...cell, whiteSpace: 'nowrap' }}>{isSub || isTot ? '' : r.fecha}</td>
+                      <td style={cell}>{isSub || isTot ? '' : r.fecha}</td>
                       <td style={cell}>{isSub || isTot ? '' : r.hora_inicio}</td>
                       <td style={cell}>{isSub || isTot ? '' : r.hora_fin}</td>
+                      <td style={cell}>{fmtExtra(r.extra_diurna)}</td>
+                      <td style={cell}>{fmtExtra(r.extra_nocturna)}</td>
+                      <td style={cell}>{fmtExtra(r.extra_festiva_diurna)}</td>
+                      <td style={cell}>{fmtExtra(r.extra_festiva_nocturna)}</td>
                       <td style={{ ...cell, fontWeight: 800 }}>{fmtExtra(r.tiempo_extra)}</td>
-                      <td style={cell}>{isSub || isTot ? '' : (r.observacion || '—')}</td>
+                      <td style={{ ...cell, whiteSpace: 'normal' }}>{isSub || isTot ? '' : (r.observacion || '—')}</td>
                     </tr>
                   )
                 })}

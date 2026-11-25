@@ -17,6 +17,9 @@ export const HORA_INGRESO_DEFAULT = '07:30'
 export const HORA_SALIDA_DEFAULT = '16:30'
 export const ALMUERZO_INICIO_DEFAULT = '12:00'
 export const ALMUERZO_FIN_DEFAULT = '13:00'
+/** Franja nocturna laboral CO (19:00–06:00). Configurable por contrato. */
+export const NOCTURNO_INICIO_DEFAULT = '19:00'
+export const NOCTURNO_FIN_DEFAULT = '06:00'
 
 function emptyDiaNoLaborable() {
   return {
@@ -48,6 +51,8 @@ export function horarioDefault(vigenteDesde = null) {
   }
   return {
     vigente_desde: vigenteDesde || hoyISOBogotaLocal(),
+    nocturno_inicio: NOCTURNO_INICIO_DEFAULT,
+    nocturno_fin: NOCTURNO_FIN_DEFAULT,
     dias,
   }
 }
@@ -142,6 +147,10 @@ export function normalizeHorario(raw, { vigenteDesde } = {}) {
     }
   }
   if (raw.vigente_desde) base.vigente_desde = String(raw.vigente_desde).slice(0, 10)
+  const ni = String(raw.nocturno_inicio || '').trim().slice(0, 5)
+  const nf = String(raw.nocturno_fin || '').trim().slice(0, 5)
+  if (hhmmAMinutos(ni) != null) base.nocturno_inicio = ni
+  if (hhmmAMinutos(nf) != null) base.nocturno_fin = nf
   return base
 }
 

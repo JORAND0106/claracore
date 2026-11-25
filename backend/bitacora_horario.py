@@ -26,6 +26,9 @@ HORA_INGRESO_DEFAULT = "07:30"
 HORA_SALIDA_DEFAULT = "16:30"
 ALMUERZO_INICIO_DEFAULT = "12:00"
 ALMUERZO_FIN_DEFAULT = "13:00"
+# Franja nocturna laboral CO (Ley 2101 / CST): 19:00–06:00. Configurable por contrato.
+NOCTURNO_INICIO_DEFAULT = "19:00"
+NOCTURNO_FIN_DEFAULT = "06:00"
 
 
 def _hoy_iso_bogota() -> str:
@@ -62,6 +65,8 @@ def horario_default(vigente_desde: Optional[str] = None) -> Dict[str, Any]:
         )
     return {
         "vigente_desde": (vigente_desde or _hoy_iso_bogota())[:10],
+        "nocturno_inicio": NOCTURNO_INICIO_DEFAULT,
+        "nocturno_fin": NOCTURNO_FIN_DEFAULT,
         "dias": dias,
     }
 
@@ -126,6 +131,12 @@ def normalize_horario(
         }
     if raw.get("vigente_desde"):
         base["vigente_desde"] = str(raw["vigente_desde"])[:10]
+    ni = str(raw.get("nocturno_inicio") or "").strip()[:5]
+    nf = str(raw.get("nocturno_fin") or "").strip()[:5]
+    if hhmm_a_minutos(ni) is not None:
+        base["nocturno_inicio"] = ni
+    if hhmm_a_minutos(nf) is not None:
+        base["nocturno_fin"] = nf
     return base
 
 
