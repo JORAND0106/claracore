@@ -528,6 +528,74 @@ export function createSeguimientoApi(contratoId, token) {
       return get(`/seguimiento/${cid}/bitacora/export/horas-extra/opciones?${q.toString()}`, 60000)
     },
 
+    opcionesBitacoraPresencia: ({ tipo = 'personal', fechaDesde, fechaHasta, empresa } = {}) => {
+      const d0 = String(fechaDesde || '').slice(0, 10)
+      const d1 = String(fechaHasta || '').slice(0, 10)
+      const tip = String(tipo || 'personal').toLowerCase() === 'maquinaria' ? 'maquinaria' : 'personal'
+      const q = new URLSearchParams({ tipo: tip, fecha_desde: d0, fecha_hasta: d1 })
+      const emp = String(empresa || '').trim()
+      if (emp) q.set('empresa', emp)
+      return get(`/seguimiento/${cid}/bitacora/export/presencia/opciones?${q.toString()}`, 60000)
+    },
+
+    /**
+     * Informe consolidado asistencia personal / presencia maquinaria (PDF / Word).
+     * @returns {{ blob: Blob, filename: string }}
+     */
+    exportBitacoraPresenciaBlob: async ({
+      tipo = 'personal',
+      fechaDesde,
+      fechaHasta,
+      empresa,
+      formato = 'pdf',
+    } = {}) => {
+      const d0 = String(fechaDesde || '').slice(0, 10)
+      const d1 = String(fechaHasta || '').slice(0, 10)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d0) || !/^\d{4}-\d{2}-\d{2}$/.test(d1)) {
+        throw new Error('Indique un rango de fechas válido (desde / hasta)')
+      }
+      const emp = String(empresa || '').trim()
+      if (!emp) throw new Error('Seleccione la empresa.')
+      const tip = String(tipo || 'personal').toLowerCase() === 'maquinaria' ? 'maquinaria' : 'personal'
+      const fmt = String(formato || 'pdf').toLowerCase()
+      if (!['pdf', 'docx'].includes(fmt)) {
+        throw new Error('Formato inválido (use PDF o Word)')
+      }
+      const q = new URLSearchParams({
+        tipo: tip,
+        fecha_desde: d0,
+        fecha_hasta: d1,
+        empresa: emp,
+        formato: fmt,
+      })
+      const sig = apiFetchSignal(120000)
+      try {
+        const res = await fetch(
+          `${API_BASE}/seguimiento/${cid}/bitacora/export/presencia?${q.toString()}`,
+          {
+            headers: authHeaders(t, false),
+            ...(sig ? { signal: sig } : {}),
+          },
+        )
+        if (!res.ok) {
+          await parseOrThrow(res)
+        }
+        const buf = await res.arrayBuffer()
+        if (!buf || buf.byteLength < 20) throw new Error('El archivo generado está vacío')
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = /filename="?([^";]+)"?/i.exec(cd)
+        const slug = tip === 'maquinaria' ? 'maquinaria' : 'asistencia'
+        const filename = (m && m[1]) || `${slug}_${d0}_${d1}.${fmt}`
+        const mime = res.headers.get('Content-Type')
+          || (fmt === 'docx'
+            ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : 'application/pdf')
+        return { blob: new Blob([buf], { type: mime }), filename }
+      } catch (e) {
+        throw mapNetworkError(e)
+      }
+    },
+
     /**
      * Informe de horas extras del personal (PDF / Word).
      * @returns {{ blob: Blob, filename: string }}

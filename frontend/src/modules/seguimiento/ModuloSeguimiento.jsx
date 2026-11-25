@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BookOpen, CalendarDays, Clock, Percent, Truck, Users,
+  BookOpen, CalendarDays, Clock, HardHat, Percent, Truck, UserCheck, Users,
 } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
 import BitacoraHorasExtraExportModal from './BitacoraHorasExtraExportModal'
+import BitacoraPresenciaExportModal from './BitacoraPresenciaExportModal'
 import { accesoBitacora } from './bitacoraPermisos'
 import ExternosDepuracionModal from './ExternosDepuracionModal'
 import MaquinariaCatalogoModal from './MaquinariaCatalogoModal'
@@ -89,11 +90,14 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [detalleCumplimientoId, setDetalleCumplimientoId] = useState(null)
   const [vistaPlan, setVistaPlan] = useState(false)
   const [horasExtraOpen, setHorasExtraOpen] = useState(false)
+  const [asistenciaOpen, setAsistenciaOpen] = useState(false)
+  const [maquinariaPresenciaOpen, setMaquinariaPresenciaOpen] = useState(false)
   const api = useMemo(
     () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
     [cid, token],
   )
   const canExportHorasExtra = Boolean(permisosBitacora?.exportar)
+  const canExportPresencia = canExportHorasExtra
 
   const doRefresh = useCallback(async () => {
     setRefreshBusy(true)
@@ -242,6 +246,34 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
                 <Clock size={17} strokeWidth={2.3} aria-hidden />
               </button>
             )}
+            {canExportPresencia && api && (
+              <button
+                type="button"
+                onClick={withTipHide(() => setAsistenciaOpen(true))}
+                title="Informe de asistencia de personal"
+                data-cc-tooltip="Asistencia de personal"
+                data-cc-tooltip-variant="short"
+                aria-label="Informe de asistencia de personal"
+                data-testid="bitacora-asistencia-btn"
+                style={toolbarIconBtn(t, { active: asistenciaOpen })}
+              >
+                <UserCheck size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            )}
+            {canExportPresencia && api && (
+              <button
+                type="button"
+                onClick={withTipHide(() => setMaquinariaPresenciaOpen(true))}
+                title="Informe de presencia de maquinaria"
+                data-cc-tooltip="Presencia de maquinaria"
+                data-cc-tooltip-variant="short"
+                aria-label="Informe de presencia de maquinaria"
+                data-testid="bitacora-maquinaria-presencia-btn"
+                style={toolbarIconBtn(t, { active: maquinariaPresenciaOpen })}
+              >
+                <HardHat size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            )}
           </div>
 
           <button
@@ -379,6 +411,20 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
         t={t}
         api={api}
         usuario={usuario}
+      />
+      <BitacoraPresenciaExportModal
+        open={asistenciaOpen}
+        onClose={() => setAsistenciaOpen(false)}
+        t={t}
+        api={api}
+        tipo="personal"
+      />
+      <BitacoraPresenciaExportModal
+        open={maquinariaPresenciaOpen}
+        onClose={() => setMaquinariaPresenciaOpen(false)}
+        t={t}
+        api={api}
+        tipo="maquinaria"
       />
     </div>
   )
