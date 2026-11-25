@@ -65,6 +65,70 @@ def test_horas_extra_laborable_y_no_laborable():
     ) == 4.0
 
 
+def test_festivo_lunes_todo_es_extra():
+    """2026-11-16 Independencia de Cartagena (lunes festivo): 08:00–11:00 → 3.00."""
+    from bitacora_he_clasificacion import clasificar_tiempo_extra
+    from bitacora_horario import etiqueta_dia_especial, tiene_jornada_ordinaria
+
+    h = horario_default()
+    assert not tiene_jornada_ordinaria(h, "2026-11-16")
+    assert etiqueta_dia_especial("2026-11-16", h) == "Festivo"
+    total = calcular_horas_extra(
+        hora_ingreso="08:00",
+        hora_salida="11:00",
+        horario=h,
+        fecha="2026-11-16",
+    )
+    assert total == 3.0
+    # Lunes ordinario (no festivo) con mismo horario sigue en 0
+    assert calcular_horas_extra(
+        hora_ingreso="08:00",
+        hora_salida="11:00",
+        horario=h,
+        fecha="2026-11-09",
+    ) == 0.0
+    c = clasificar_tiempo_extra(
+        hora_ingreso="08:00",
+        hora_salida="11:00",
+        fecha="2026-11-16",
+        horario=h,
+        total_extra=total,
+    )
+    assert c["extra_festiva_diurna"] == 3.0
+    assert c["tiempo_extra"] == 3.0
+
+
+def test_domingo_laborable_respeta_jornada():
+    """Si el contrato marca domingo laborable, no se trata como día especial."""
+    from bitacora_horario import etiqueta_dia_especial, tiene_jornada_ordinaria
+
+    h = normalize_horario({
+        "dias": {
+            "dom": {
+                "laborable": True,
+                "entrada": "08:00",
+                "salida": "12:00",
+                "almuerzo_inicio": "",
+                "almuerzo_fin": "",
+            },
+        },
+    })
+    assert tiene_jornada_ordinaria(h, "2026-11-08")
+    assert etiqueta_dia_especial("2026-11-08", h) is None
+    assert calcular_horas_extra(
+        hora_ingreso="08:00",
+        hora_salida="12:00",
+        horario=h,
+        fecha="2026-11-08",
+    ) == 0.0
+    assert calcular_horas_extra(
+        hora_ingreso="08:00",
+        hora_salida="14:00",
+        horario=h,
+        fecha="2026-11-08",
+    ) == 2.0
+
+
 def test_normalizar_conserva_justificacion_horas_extra():
     rows = _normalizar_asistencia_colaboradores([
         {

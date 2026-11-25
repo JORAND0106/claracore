@@ -20,6 +20,7 @@ from bitacora_horario import (
     dia_horario_para_fecha,
     hhmm_a_minutos,
     normalize_horario,
+    tiene_jornada_ordinaria,
 )
 from prog_obra_calendar import festivos_colombia_año
 
@@ -112,6 +113,9 @@ def _worked_abs_segments(
 
 
 def _ordinary_abs_segments(horario: Any, fecha: date) -> List[Tuple[int, int]]:
+    # Festivo CO (u domingo no laborable): no hay jornada ordinaria que restar.
+    if not tiene_jornada_ordinaria(horario, fecha):
+        return []
     dia = dia_horario_para_fecha(horario, fecha)
     if not dia.get("laborable"):
         return []

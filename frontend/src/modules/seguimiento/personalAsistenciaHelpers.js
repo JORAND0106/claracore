@@ -5,6 +5,7 @@ import {
   HORA_INGRESO_DEFAULT as HORA_INGRESO_HORARIO,
   HORA_SALIDA_DEFAULT as HORA_SALIDA_HORARIO,
   calcularHorasExtra,
+  etiquetaDiaEspecial,
   horasPrecargaDesdeHorario,
 } from './bitacoraHorario.js'
 
@@ -193,6 +194,7 @@ export function enriquecerAsistenciaConHorasExtra(row, { horario = null, fechaIS
   return {
     ...r,
     horas_extra: extra,
+    etiqueta_especial: extra > 0 ? etiquetaDiaEspecial(fechaISO, horario) : null,
     justificacion_horas_extra: extra > 0
       ? String(r.justificacion_horas_extra || r.justificacion_extra || '').trim()
       : '',

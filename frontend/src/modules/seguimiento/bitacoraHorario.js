@@ -2,6 +2,7 @@
  * Horario laboral por contrato (Bitácora) + cálculo de horas / horas extra.
  * Horas en America/Bogota; formato HH:MM.
  */
+import { festivoEnFecha, isDomingoIso } from '../../utils/festivosColombia.js'
 
 export const DIAS_SEMANA = [
   { key: 'lun', label: 'Lunes', jsDay: 1 },
@@ -162,17 +163,44 @@ export function diaHorarioParaFecha(horario, fechaISO) {
   return h.dias[key] || emptyDiaNoLaborable()
 }
 
+/**
+ * Etiqueta breve junto a Hrs extra: «Festivo» o «Domingo».
+ * Domingo con jornada ordinaria en el contrato → null (ordinario).
+ */
+export function etiquetaDiaEspecial(fechaISO, horario = null) {
+  if (festivoEnFecha(fechaISO)) return 'Festivo'
+  if (isDomingoIso(fechaISO)) {
+    const dia = diaHorarioParaFecha(horario, fechaISO)
+    if (dia?.laborable) return null
+    return 'Domingo'
+  }
+  return null
+}
+
+/**
+ * False en festivo oficial CO (aunque el día de la semana sea laborable).
+ * Domingo: solo True si el contrato marca domingo como laborable.
+ */
+export function tieneJornadaOrdinaria(horario, fechaISO) {
+  if (festivoEnFecha(fechaISO)) return false
+  const dia = diaHorarioParaFecha(horario, fechaISO)
+  return Boolean(dia?.laborable)
+}
+
 /** Horas de entrada/salida a precargar para personal ese día. */
 export function horasPrecargaDesdeHorario(horario, fechaISO) {
   const dia = diaHorarioParaFecha(horario, fechaISO)
-  if (!dia.laborable) {
+  const etiqueta = etiquetaDiaEspecial(fechaISO, horario)
+  if (!tieneJornadaOrdinaria(horario, fechaISO)) {
+    // Sin jornada ordinaria: no descontar almuerzo del contrato.
     return {
       hora_ingreso: HORA_INGRESO_DEFAULT,
       hora_salida: HORA_SALIDA_DEFAULT,
       laborable: false,
-      almuerzo_inicio: dia.almuerzo_inicio || '',
-      almuerzo_fin: dia.almuerzo_fin || '',
+      almuerzo_inicio: '',
+      almuerzo_fin: '',
       horas_jornada: 0,
+      etiqueta_especial: etiqueta,
     }
   }
   return {
@@ -182,6 +210,7 @@ export function horasPrecargaDesdeHorario(horario, fechaISO) {
     almuerzo_inicio: dia.almuerzo_inicio || '',
     almuerzo_fin: dia.almuerzo_fin || '',
     horas_jornada: horasLaborablesDia(dia),
+    etiqueta_especial: null,
   }
 }
 
