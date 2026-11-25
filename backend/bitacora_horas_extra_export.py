@@ -35,6 +35,17 @@ TITULO_FORMATO_HORAS_EXTRA = "INFORME DE HORAS EXTRAS DEL PERSONAL"
 VERSION_FORMATO_HORAS_EXTRA = "1.0"
 
 EMPRESA_SIN_NOMBRE = "Sin empresa"
+EMPRESA_TODAS_KEY = "__todas__"
+EMPRESA_TODAS_LABEL = "Todas las empresas"
+
+
+def es_empresa_todas(empresa_key: Any) -> bool:
+    raw = str(empresa_key or "").strip().lower()
+    if not raw:
+        return False
+    if raw == EMPRESA_TODAS_KEY:
+        return True
+    return raw in ("todas", "todas las empresas")
 
 
 def _texto_unicode(s: Any) -> str:
@@ -190,10 +201,13 @@ def construir_filas_horas_extra(
     horario_contrato=None,
     contrato_id: Optional[int] = None,
 ) -> List[dict]:
-    """Filas con tiempo extra > 0, orden fecha → nombre."""
-    emp_filtro = _key_empresa(empresa_key) if empresa_key else None
-    if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
-        emp_filtro = None
+    """Filas con tiempo extra > 0. Con ``__todas__`` no filtra por empresa."""
+    todas = es_empresa_todas(empresa_key)
+    emp_filtro = None
+    if not todas and empresa_key:
+        emp_filtro = _key_empresa(empresa_key)
+        if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
+            emp_filtro = None
 
     out: List[dict] = []
     for d in diarios or []:
@@ -247,99 +261,202 @@ def construir_filas_horas_extra(
                 "empresa_key": _key_empresa(empresa),
             })
 
-    # Agrupar por colaborador: nombre → documento → fechas cronológicas.
-    out.sort(key=lambda r: (
-        r["nombre"].lower(),
-        r.get("documento") or "",
-        r["fecha"],
-    ))
+    if todas:
+        out.sort(key=lambda r: (
+            (r.get("empresa") or EMPRESA_SIN_NOMBRE) == EMPRESA_SIN_NOMBRE,
+            str(r.get("empresa") or "").lower(),
+            r["nombre"].lower(),
+            r.get("documento") or "",
+            r["fecha"],
+        ))
+    else:
+        out.sort(key=lambda r: (
+            r["nombre"].lower(),
+            r.get("documento") or "",
+            r["fecha"],
+        ))
     return out
 
 
-def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
+def _append_grupo_colaborador(
+    vista: List[dict],
+    *,
+    idx: int,
+    nombre: str,
+    documento: str,
+    rows: List[dict],
+    total_buckets: Dict[str, float],
+) -> float:
+    """Agrega detalle+subtotal de un colaborador; devuelve subtotal del grupo."""
+    subtotal = 0.0
+    sub_buckets = {k: 0.0 for k in _EXTRA_KEYS}
+    for r in rows:
+        try:
+            extra = float(r.get("tiempo_extra") or 0)
+        except (TypeError, ValueError):
+            extra = 0.0
+        if extra < 0:
+            extra = 0.0
+        buckets = {}
+        for k in _EXTRA_KEYS:
+            try:
+                buckets[k] = max(0.0, float(r.get(k) or 0))
+            except (TypeError, ValueError):
+                buckets[k] = 0.0
+        if extra > 0 and sum(buckets.values()) <= 0:
+            buckets["extra_diurna"] = extra
+        subtotal += extra
+        for k in _EXTRA_KEYS:
+            sub_buckets[k] += buckets[k]
+        vista.append({
+            "tipo": "detalle",
+            "no": idx,
+            "nombre": nombre,
+            "documento": documento or "—",
+            "fecha": r.get("fecha") or "",
+            "hora_inicio": r.get("hora_inicio") or "—",
+            "hora_fin": r.get("hora_fin") or "—",
+            **{k: round(buckets[k], 2) for k in _EXTRA_KEYS},
+            "tiempo_extra": extra,
+            "observacion": r.get("observacion") or "—",
+            "empresa": r.get("empresa"),
+            "empresa_key": r.get("empresa_key"),
+        })
+    for k in _EXTRA_KEYS:
+        total_buckets[k] += sub_buckets[k]
+    vista.append({
+        "tipo": "subtotal",
+        "no": "",
+        "nombre": nombre,
+        "documento": documento or "—",
+        "fecha": "",
+        "hora_inicio": "",
+        "hora_fin": "",
+        **{k: round(sub_buckets[k], 2) for k in _EXTRA_KEYS},
+        "tiempo_extra": round(subtotal, 2),
+        "observacion": "Subtotal",
+        "empresa": rows[0].get("empresa") if rows else None,
+        "empresa_key": rows[0].get("empresa_key") if rows else None,
+    })
+    return subtotal
+
+
+def filas_informe_agrupadas(
+    filas: List[dict],
+    *,
+    agrupar_por_empresa: bool = False,
+) -> List[dict]:
     """
-    Convierte filas detalle en filas de vista:
-      - detalle (No = índice de colaborador; nombre/doc en cada fila)
-      - subtotal por colaborador
+    Vista del informe:
+      - detalle + subtotal por colaborador
+      - si ``agrupar_por_empresa``: título y subtotal por empresa
       - total general al final
+    Numeración (No) continua entre empresas.
     """
     if not filas:
         return []
 
-    groups: List[Tuple[str, str, List[dict]]] = []
-    cur_key: Optional[Tuple[str, str]] = None
-    cur_rows: List[dict] = []
-    for r in filas:
-        if not isinstance(r, dict):
-            continue
-        key = (str(r.get("nombre") or "").strip(), str(r.get("documento") or "").strip())
-        if cur_key is None:
-            cur_key = key
-            cur_rows = [r]
-            continue
-        if key != cur_key:
-            groups.append((cur_key[0], cur_key[1], cur_rows))
-            cur_key = key
-            cur_rows = [r]
-        else:
-            cur_rows.append(r)
-    if cur_key is not None and cur_rows:
-        groups.append((cur_key[0], cur_key[1], cur_rows))
-
     vista: List[dict] = []
-    total_general = 0.0
     total_buckets = {k: 0.0 for k in _EXTRA_KEYS}
-    for idx, (nombre, documento, rows) in enumerate(groups, 1):
-        subtotal = 0.0
-        sub_buckets = {k: 0.0 for k in _EXTRA_KEYS}
-        for r in rows:
-            try:
-                extra = float(r.get("tiempo_extra") or 0)
-            except (TypeError, ValueError):
-                extra = 0.0
-            if extra < 0:
-                extra = 0.0
-            buckets = {}
+    total_general = 0.0
+    idx = 0
+
+    def _flush_colab_groups(rows_src: List[dict], *, emp_nombre: Optional[str] = None):
+        nonlocal idx, total_general
+        # Agrupar por colaborador dentro del bloque
+        groups: List[Tuple[str, str, List[dict]]] = []
+        cur_key: Optional[Tuple[str, str]] = None
+        cur_rows: List[dict] = []
+        for r in rows_src:
+            if not isinstance(r, dict):
+                continue
+            key = (str(r.get("nombre") or "").strip(), str(r.get("documento") or "").strip())
+            if cur_key is None:
+                cur_key = key
+                cur_rows = [r]
+                continue
+            if key != cur_key:
+                groups.append((cur_key[0], cur_key[1], cur_rows))
+                cur_key = key
+                cur_rows = [r]
+            else:
+                cur_rows.append(r)
+        if cur_key is not None and cur_rows:
+            groups.append((cur_key[0], cur_key[1], cur_rows))
+
+        emp_buckets = {k: 0.0 for k in _EXTRA_KEYS}
+        emp_total = 0.0
+        for nombre, documento, rows in groups:
+            idx += 1
+            sub = _append_grupo_colaborador(
+                vista,
+                idx=idx,
+                nombre=nombre,
+                documento=documento,
+                rows=rows,
+                total_buckets=total_buckets,
+            )
+            emp_total += sub
+            # sumar del último subtotal insertado
+            last = vista[-1]
             for k in _EXTRA_KEYS:
-                try:
-                    buckets[k] = max(0.0, float(r.get(k) or 0))
-                except (TypeError, ValueError):
-                    buckets[k] = 0.0
-            # Si faltan tipos (filas legacy de test), todo a diurna.
-            if extra > 0 and sum(buckets.values()) <= 0:
-                buckets["extra_diurna"] = extra
-            subtotal += extra
-            for k in _EXTRA_KEYS:
-                sub_buckets[k] += buckets[k]
+                emp_buckets[k] += float(last.get(k) or 0)
+        total_general += emp_total
+        if emp_nombre is not None:
             vista.append({
-                "tipo": "detalle",
-                "no": idx,
-                "nombre": nombre,
-                "documento": documento or "—",
-                "fecha": r.get("fecha") or "",
-                "hora_inicio": r.get("hora_inicio") or "—",
-                "hora_fin": r.get("hora_fin") or "—",
-                **{k: round(buckets[k], 2) for k in _EXTRA_KEYS},
-                "tiempo_extra": extra,
-                "observacion": r.get("observacion") or "—",
-                "empresa": r.get("empresa"),
-                "empresa_key": r.get("empresa_key"),
+                "tipo": "subtotal_empresa",
+                "no": "",
+                "nombre": emp_nombre,
+                "documento": "",
+                "fecha": "",
+                "hora_inicio": "",
+                "hora_fin": "",
+                **{k: round(emp_buckets[k], 2) for k in _EXTRA_KEYS},
+                "tiempo_extra": round(emp_total, 2),
+                "observacion": "Subtotal empresa",
+                "empresa": emp_nombre,
             })
-        total_general += subtotal
-        for k in _EXTRA_KEYS:
-            total_buckets[k] += sub_buckets[k]
-        vista.append({
-            "tipo": "subtotal",
-            "no": "",
-            "nombre": nombre,
-            "documento": documento or "—",
-            "fecha": "",
-            "hora_inicio": "",
-            "hora_fin": "",
-            **{k: round(sub_buckets[k], 2) for k in _EXTRA_KEYS},
-            "tiempo_extra": round(subtotal, 2),
-            "observacion": "Subtotal",
-        })
+
+    if agrupar_por_empresa:
+        # Particionar por empresa (ya vienen ordenadas)
+        bloques: List[Tuple[str, str, List[dict]]] = []
+        cur_ek: Optional[str] = None
+        cur_en: str = EMPRESA_SIN_NOMBRE
+        cur_rs: List[dict] = []
+        for r in filas:
+            if not isinstance(r, dict):
+                continue
+            ek = str(r.get("empresa_key") or _key_empresa(r.get("empresa")))
+            en = str(r.get("empresa") or EMPRESA_SIN_NOMBRE)
+            if cur_ek is None:
+                cur_ek, cur_en, cur_rs = ek, en, [r]
+                continue
+            if ek != cur_ek:
+                bloques.append((cur_ek, cur_en, cur_rs))
+                cur_ek, cur_en, cur_rs = ek, en, [r]
+            else:
+                cur_rs.append(r)
+        if cur_ek is not None:
+            bloques.append((cur_ek, cur_en, cur_rs))
+
+        for _ek, en, rs in bloques:
+            vista.append({
+                "tipo": "empresa",
+                "no": "",
+                "nombre": en,
+                "documento": "",
+                "fecha": "",
+                "hora_inicio": "",
+                "hora_fin": "",
+                **{k: 0.0 for k in _EXTRA_KEYS},
+                "tiempo_extra": 0.0,
+                "observacion": "",
+                "empresa": en,
+                "empresa_key": _ek,
+            })
+            _flush_colab_groups(rs, emp_nombre=en)
+    else:
+        _flush_colab_groups(list(filas), emp_nombre=None)
 
     vista.append({
         "tipo": "total",
@@ -376,6 +493,17 @@ def empresas_con_personal_reportado(diarios: List[dict]) -> List[dict]:
     return items
 
 
+def empresas_con_opcion_todas(empresas: List[dict]) -> List[dict]:
+    """Antepone «Todas las empresas» cuando hay al menos una empresa real."""
+    items = [e for e in (empresas or []) if isinstance(e, dict) and e.get("key")]
+    if not items:
+        return []
+    return [
+        {"key": EMPRESA_TODAS_KEY, "nombre": EMPRESA_TODAS_LABEL},
+        *items,
+    ]
+
+
 def opciones_informe_horas_extra(
     sb,
     contrato_id: int,
@@ -406,7 +534,7 @@ def opciones_informe_horas_extra(
             "cargo": _usuario_cargo(u),
             "email": u.get("email") or "",
         })
-    empresas = empresas_con_personal_reportado(diarios)
+    empresas = empresas_con_opcion_todas(empresas_con_personal_reportado(diarios))
     filas: List[dict] = []
     emp = str(empresa_key or "").strip()
     if emp:
@@ -416,7 +544,9 @@ def opciones_informe_horas_extra(
             horario_contrato=horario_contrato,
             contrato_id=int(contrato_id),
         )
-        filas = filas_informe_agrupadas(detalle)
+        filas = filas_informe_agrupadas(
+            detalle, agrupar_por_empresa=es_empresa_todas(emp),
+        )
     return {
         "empresas": empresas,
         "usuarios": usuarios_out,
@@ -427,6 +557,8 @@ def opciones_informe_horas_extra(
             "version": VERSION_FORMATO_HORAS_EXTRA,
             "titulo": TITULO_FORMATO_HORAS_EXTRA,
         },
+        "empresa_todas_key": EMPRESA_TODAS_KEY,
+        "empresa_todas_label": EMPRESA_TODAS_LABEL,
     }
 
 
@@ -538,7 +670,8 @@ def construir_informe_horas_extra(
         raise ValueError(
             "No hay tiempo extra registrado para el rango y la empresa seleccionados."
         )
-    filas = filas_informe_agrupadas(detalle)
+    todas = es_empresa_todas(empresa_key)
+    filas = filas_informe_agrupadas(detalle, agrupar_por_empresa=todas)
     t_filas = _time.perf_counter()
 
     contrato = contrato_meta_bitacora(sb, int(contrato_id)) or {}
@@ -559,14 +692,18 @@ def construir_informe_horas_extra(
     aprobo = _by_id(aprobador_id)
     t_meta = _time.perf_counter()
 
-    emp_key = _key_empresa(empresa_key)
-    emp_nombre = None
-    for e in empresas_con_personal_reportado(diarios):
-        if e["key"] == emp_key:
-            emp_nombre = e["nombre"]
-            break
-    if not emp_nombre:
-        emp_nombre = detalle[0].get("empresa") or EMPRESA_SIN_NOMBRE
+    if todas:
+        emp_key = EMPRESA_TODAS_KEY
+        emp_nombre = EMPRESA_TODAS_LABEL
+    else:
+        emp_key = _key_empresa(empresa_key)
+        emp_nombre = None
+        for e in empresas_con_personal_reportado(diarios):
+            if e["key"] == emp_key:
+                emp_nombre = e["nombre"]
+                break
+        if not emp_nombre:
+            emp_nombre = detalle[0].get("empresa") or EMPRESA_SIN_NOMBRE
 
     _log.info(
         "horas_extra payload contrato=%s diarios=%s filas=%s "
@@ -651,12 +788,38 @@ def _piezas_html_horas_extra(payload: dict) -> dict:
     det_i = 0
     for r in filas:
         tipo = str(r.get("tipo") or "detalle")
+        if tipo == "empresa":
+            bg = t1.get("bg") or "#0077B6"
+            fg = t1.get("text") or "#FFFFFF"
+            body_rows.append(
+                "<tr class=\"empresa\" style=\"background:%s;color:%s;font-weight:bold;"
+                "page-break-after:avoid;-pdf-keep-with-next:true;\">"
+                "<td colspan=\"12\">%s</td>"
+                "</tr>" % (bg, fg, _esc(r.get("nombre") or EMPRESA_SIN_NOMBRE))
+            )
+            continue
         if tipo == "subtotal":
             bg = t2.get("bg") or "#E5F4FA"
             body_rows.append(
                 "<tr class=\"subtotal\" style=\"background:%s;font-weight:bold;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Subtotal · %s</td>"
+                "%s"
+                "<td></td>"
+                "</tr>" % (
+                    bg,
+                    _esc(r.get("nombre") or ""),
+                    _cols_extra(r),
+                )
+            )
+            continue
+        if tipo == "subtotal_empresa":
+            bg = t2.get("bg") or "#E5F4FA"
+            body_rows.append(
+                "<tr class=\"subtotal-empresa\" style=\"background:%s;font-weight:bold;"
+                "page-break-before:avoid;\">"
+                "<td style=\"text-align:center;\"></td>"
+                "<td colspan=\"5\">Subtotal empresa · %s</td>"
                 "%s"
                 "<td></td>"
                 "</tr>" % (
@@ -1030,11 +1193,35 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
 
     for ri, r in enumerate(filas):
         tipo = str(r.get("tipo") or "detalle")
-        if tipo == "subtotal":
+        if tipo == "empresa":
+            vals = [
+                "",
+                str(r.get("nombre") or EMPRESA_SIN_NOMBRE),
+                "", "", "", "",
+                "", "", "", "", "",
+                "",
+            ]
+            fill = "0077B6"
+            bold = True
+        elif tipo == "subtotal":
             vals = [
                 "",
                 f"Subtotal · {r.get('nombre') or ''}",
                 r.get("documento") or "",
+                "",
+                "",
+                "",
+                *[_fmt_extra(r.get(k), blank_zero=True) for k in _EXTRA_KEYS],
+                _fmt_extra(r.get("tiempo_extra"), blank_zero=True),
+                "",
+            ]
+            fill = "E5F4FA"
+            bold = True
+        elif tipo == "subtotal_empresa":
+            vals = [
+                "",
+                f"Subtotal empresa · {r.get('nombre') or ''}",
+                "",
                 "",
                 "",
                 "",

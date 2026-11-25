@@ -16,8 +16,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from bitacora_export_rango import list_diarios_rango
 from bitacora_horas_extra_export import (
     EMPRESA_SIN_NOMBRE,
+    EMPRESA_TODAS_KEY,
+    EMPRESA_TODAS_LABEL,
     _key_empresa,
     _nombre_empresa_asistencia,
+    empresas_con_opcion_todas,
+    es_empresa_todas,
 )
 from bitacora_pdf import _palette
 from bitacora_service import contrato_meta_bitacora
@@ -179,9 +183,12 @@ def construir_matriz_asistencia(
         )
     ]
 
-    emp_filtro = _key_empresa(empresa_key) if empresa_key else None
-    if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
-        emp_filtro = None
+    todas = es_empresa_todas(empresa_key)
+    emp_filtro = None
+    if not todas and empresa_key:
+        emp_filtro = _key_empresa(empresa_key)
+        if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
+            emp_filtro = None
 
     # Asistencia por día → set de persona_key (filtrada por empresa)
     asist_por_dia: Dict[str, set] = {d.isoformat(): set() for d in fechas}
@@ -212,6 +219,7 @@ def construir_matriz_asistencia(
                     "documento": re.sub(r"\D+", "", str(a.get("documento_numero") or "")) or "—",
                     "cargo": str(a.get("cargo") or "").strip() or "—",
                     "empresa": emp_n,
+                    "empresa_key": _key_empresa(emp_n),
                 }
 
     # Activos RRHH de la empresa
@@ -237,12 +245,12 @@ def construir_matriz_asistencia(
             "documento": re.sub(r"\D+", "", str(t.get("numero_documento") or "")) or "—",
             "cargo": str(t.get("cargo_aspira") or "").strip() or "—",
             "empresa": emp_n,
+            "empresa_key": _key_empresa(emp_n),
         }
 
     # Agregar quienes asistieron aunque no estén activos
     for pk, info in personas_asist.items():
         if pk not in filas_map:
-            # Intentar fusionar por doc si ya hay rrhh con mismo doc
             doc = info["documento"]
             merged_pk = None
             if doc and doc != "—":
@@ -251,7 +259,6 @@ def construir_matriz_asistencia(
                         merged_pk = k
                         break
             if merged_pk:
-                # Reasignar marcas de asistencia al pk canónico
                 for fecha, s in asist_por_dia.items():
                     if pk in s:
                         s.discard(pk)
@@ -259,8 +266,7 @@ def construir_matriz_asistencia(
             else:
                 filas_map[pk] = info
 
-    if not emp_filtro:
-        # Sin empresa aún no armamos filas (selector)
+    if not emp_filtro and not todas:
         return {
             "empresas": empresas,
             "dias": dias,
@@ -272,28 +278,100 @@ def construir_matriz_asistencia(
     ordered = sorted(
         filas_map.values(),
         key=lambda r: (
+            (str(r.get("empresa") or "") == EMPRESA_SIN_NOMBRE) if todas else False,
+            str(r.get("empresa") or "").lower() if todas else "",
             str(r.get("cargo") or "").lower(),
             str(r.get("nombre") or "").lower(),
         ),
     )
 
     filas_out: List[dict] = []
-    for i, r in enumerate(ordered, 1):
-        pk = r["key"]
-        marcas = []
-        total = 0
-        for meta in dias:
-            ok = pk in asist_por_dia.get(meta["iso"], set())
-            marcas.append("X" if ok else "")
-            if ok:
-                total += 1
+    if not todas:
+        for i, r in enumerate(ordered, 1):
+            pk = r["key"]
+            marcas = []
+            total = 0
+            for meta in dias:
+                ok = pk in asist_por_dia.get(meta["iso"], set())
+                marcas.append("X" if ok else "")
+                if ok:
+                    total += 1
+            filas_out.append({
+                "tipo": "detalle",
+                "no": i,
+                "nombre": r["nombre"],
+                "documento": r["documento"],
+                "cargo": r["cargo"],
+                "marcas": marcas,
+                "total": total,
+                "empresa": r.get("empresa"),
+            })
+    else:
+        no = 0
+        tot_dia = [0] * len(dias)
+        tot_asist = 0
+        i = 0
+        while i < len(ordered):
+            emp_n = ordered[i].get("empresa") or EMPRESA_SIN_NOMBRE
+            emp_k = ordered[i].get("empresa_key") or _key_empresa(emp_n)
+            filas_out.append({
+                "tipo": "empresa",
+                "no": "",
+                "nombre": emp_n,
+                "documento": "",
+                "cargo": "",
+                "marcas": [""] * len(dias),
+                "total": "",
+                "empresa": emp_n,
+            })
+            emp_dia = [0] * len(dias)
+            emp_asist = 0
+            while i < len(ordered) and (
+                ordered[i].get("empresa_key") or _key_empresa(ordered[i].get("empresa"))
+            ) == emp_k:
+                r = ordered[i]
+                pk = r["key"]
+                marcas = []
+                total = 0
+                for di, meta in enumerate(dias):
+                    ok = pk in asist_por_dia.get(meta["iso"], set())
+                    marcas.append("X" if ok else "")
+                    if ok:
+                        total += 1
+                        emp_dia[di] += 1
+                        tot_dia[di] += 1
+                emp_asist += total
+                tot_asist += total
+                no += 1
+                filas_out.append({
+                    "tipo": "detalle",
+                    "no": no,
+                    "nombre": r["nombre"],
+                    "documento": r["documento"],
+                    "cargo": r["cargo"],
+                    "marcas": marcas,
+                    "total": total,
+                    "empresa": emp_n,
+                })
+                i += 1
+            filas_out.append({
+                "tipo": "subtotal_empresa",
+                "no": "",
+                "nombre": emp_n,
+                "documento": "",
+                "cargo": "",
+                "marcas": [str(c) if c else "" for c in emp_dia],
+                "total": emp_asist,
+                "empresa": emp_n,
+            })
         filas_out.append({
-            "no": i,
-            "nombre": r["nombre"],
-            "documento": r["documento"],
-            "cargo": r["cargo"],
-            "marcas": marcas,
-            "total": total,
+            "tipo": "total",
+            "no": "",
+            "nombre": "Total general",
+            "documento": "",
+            "cargo": "",
+            "marcas": [str(c) if c else "" for c in tot_dia],
+            "total": tot_asist,
         })
 
     return {
@@ -302,8 +380,10 @@ def construir_matriz_asistencia(
         "filas": filas_out,
         "fecha_desde": d0.isoformat(),
         "fecha_hasta": d1.isoformat(),
-        "empresa": next((e["nombre"] for e in empresas if e["key"] == emp_filtro), empresa_key),
-        "empresa_key": emp_filtro,
+        "empresa": EMPRESA_TODAS_LABEL if todas else next(
+            (e["nombre"] for e in empresas if e["key"] == emp_filtro), empresa_key
+        ),
+        "empresa_key": EMPRESA_TODAS_KEY if todas else emp_filtro,
     }
 
 
@@ -415,11 +495,14 @@ def construir_matriz_maquinaria(
         )
     ]
 
-    emp_filtro = _key_empresa(empresa_key) if empresa_key else None
-    if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
-        emp_filtro = None
+    todas = es_empresa_todas(empresa_key)
+    emp_filtro = None
+    if not todas and empresa_key:
+        emp_filtro = _key_empresa(empresa_key)
+        if emp_filtro == "__sin_empresa__" and not str(empresa_key or "").strip():
+            emp_filtro = None
 
-    if not emp_filtro:
+    if not emp_filtro and not todas:
         return {
             "empresas": empresas,
             "dias": dias,
@@ -428,36 +511,123 @@ def construir_matriz_maquinaria(
             "fecha_hasta": d1.isoformat(),
         }
 
-    filas_src = []
+    # Asignar cada equipo a una empresa primaria (primera clave ordenada)
+    filas_src = []  # (emp_key, emp_nombre, meta, dias_ok)
     for ek, meta in meta_eq.items():
-        if emp_filtro not in emp_por_eq.get(ek, set()):
+        emps_eq = sorted(emp_por_eq.get(ek) or [])
+        if not emps_eq:
             continue
         dias_ok = presencia.get(ek) or set()
         if not dias_ok:
             continue
-        filas_src.append((meta, dias_ok))
+        if todas:
+            # Una empresa primaria por equipo (evita doble conteo en totales)
+            ek_emp = emps_eq[0]
+            filas_src.append((
+                ek_emp,
+                empresas_seen.get(ek_emp, EMPRESA_SIN_NOMBRE),
+                meta,
+                dias_ok,
+            ))
+        else:
+            if emp_filtro not in emps_eq:
+                continue
+            filas_src.append((
+                emp_filtro,
+                empresas_seen.get(emp_filtro, EMPRESA_SIN_NOMBRE),
+                meta,
+                dias_ok,
+            ))
 
     filas_src.sort(key=lambda x: (
-        str(x[0].get("tipo") or "").lower(),
-        str(x[0].get("nombre") or "").lower(),
+        x[1] == EMPRESA_SIN_NOMBRE,
+        x[1].lower(),
+        str(x[2].get("tipo") or "").lower(),
+        str(x[2].get("nombre") or "").lower(),
     ))
 
     filas_out: List[dict] = []
-    for i, (meta, dias_ok) in enumerate(filas_src, 1):
-        marcas = []
-        total = 0
-        for md in dias:
-            ok = md["iso"] in dias_ok
-            marcas.append("X" if ok else "")
-            if ok:
-                total += 1
+    if not todas:
+        for i, (_ek, _en, meta, dias_ok) in enumerate(filas_src, 1):
+            marcas = []
+            total = 0
+            for md in dias:
+                ok = md["iso"] in dias_ok
+                marcas.append("X" if ok else "")
+                if ok:
+                    total += 1
+            # `tipo` = tipo de equipo (compat FE/PDF existentes)
+            filas_out.append({
+                "no": i,
+                "nombre": meta["nombre"],
+                "identificacion": meta["identificacion"],
+                "tipo": meta["tipo"],
+                "tipo_equipo": meta["tipo"],
+                "marcas": marcas,
+                "total": total,
+            })
+    else:
+        no = 0
+        tot_dia = [0] * len(dias)
+        tot_pres = 0
+        i = 0
+        while i < len(filas_src):
+            emp_k, emp_n = filas_src[i][0], filas_src[i][1]
+            filas_out.append({
+                "tipo": "empresa",
+                "no": "",
+                "nombre": emp_n,
+                "identificacion": "",
+                "tipo_equipo": "",
+                "marcas": [""] * len(dias),
+                "total": "",
+                "empresa": emp_n,
+            })
+            emp_dia = [0] * len(dias)
+            emp_pres = 0
+            while i < len(filas_src) and filas_src[i][0] == emp_k:
+                _ek, _en, meta, dias_ok = filas_src[i]
+                marcas = []
+                total = 0
+                for di, md in enumerate(dias):
+                    ok = md["iso"] in dias_ok
+                    marcas.append("X" if ok else "")
+                    if ok:
+                        total += 1
+                        emp_dia[di] += 1
+                        tot_dia[di] += 1
+                emp_pres += total
+                tot_pres += total
+                no += 1
+                filas_out.append({
+                    "tipo": "detalle",
+                    "no": no,
+                    "nombre": meta["nombre"],
+                    "identificacion": meta["identificacion"],
+                    "tipo_equipo": meta["tipo"],
+                    "marcas": marcas,
+                    "total": total,
+                    "empresa": emp_n,
+                })
+                i += 1
+            filas_out.append({
+                "tipo": "subtotal_empresa",
+                "no": "",
+                "nombre": emp_n,
+                "identificacion": "",
+                "tipo_equipo": "",
+                "marcas": [str(c) if c else "" for c in emp_dia],
+                "total": emp_pres,
+                "empresa": emp_n,
+            })
         filas_out.append({
-            "no": i,
-            "nombre": meta["nombre"],
-            "identificacion": meta["identificacion"],
-            "tipo": meta["tipo"],
-            "marcas": marcas,
-            "total": total,
+            "tipo": "total",
+            "no": "",
+            "nombre": "Total general",
+            "identificacion": "",
+            "tipo_equipo": "",
+            "marcas": [str(c) if c else "" for c in tot_dia],
+            "total": tot_pres,
         })
 
     return {
@@ -466,8 +636,10 @@ def construir_matriz_maquinaria(
         "filas": filas_out,
         "fecha_desde": d0.isoformat(),
         "fecha_hasta": d1.isoformat(),
-        "empresa": next((e["nombre"] for e in empresas if e["key"] == emp_filtro), empresa_key),
-        "empresa_key": emp_filtro,
+        "empresa": EMPRESA_TODAS_LABEL if todas else next(
+            (e["nombre"] for e in empresas if e["key"] == emp_filtro), empresa_key
+        ),
+        "empresa_key": EMPRESA_TODAS_KEY if todas else emp_filtro,
     }
 
 
@@ -511,12 +683,15 @@ def opciones_informe_presencia(
         }
     return {
         "tipo": tipo_l,
-        "empresas": data.get("empresas") or [],
+        "empresas": empresas_con_opcion_todas(data.get("empresas") or []),
         "dias": data.get("dias") or [],
         "filas": data.get("filas") or [],
         "fecha_desde": data.get("fecha_desde"),
         "fecha_hasta": data.get("fecha_hasta"),
         "empresa": data.get("empresa"),
+        "empresa_key": data.get("empresa_key"),
+        "empresa_todas_key": EMPRESA_TODAS_KEY,
+        "empresa_todas_label": EMPRESA_TODAS_LABEL,
         "formato": fmt,
     }
 
@@ -625,12 +800,63 @@ def _piezas_presencia(payload: dict) -> dict:
 
         start = bi * DIAS_POR_BLOQUE
         end = start + len(bloque)
+        ncols = 4 + len(bloque) + 1
         body_rows = []
         for ri, r in enumerate(filas):
+            kind = str(r.get("tipo") or "detalle")
+            if kind not in ("empresa", "subtotal_empresa", "total", "detalle"):
+                kind = "detalle"  # tipo de equipo en maquinaria simple
             marcas = list(r.get("marcas") or [])
             slice_m = marcas[start:end]
             while len(slice_m) < len(bloque):
                 slice_m.append("")
+
+            if kind == "empresa":
+                bg, fg = t1.get("bg") or "#0077B6", t1.get("text") or "#FFFFFF"
+                body_rows.append(
+                    f'<tr class="empresa" style="background:{bg};color:{fg};font-weight:bold;'
+                    f'page-break-after:avoid;-pdf-keep-with-next:true;">'
+                    f'<td colspan="{ncols}">{_esc(r.get("nombre") or EMPRESA_SIN_NOMBRE)}</td>'
+                    f"</tr>"
+                )
+                continue
+
+            if kind == "subtotal_empresa":
+                bg = t2.get("bg") or "#E5F4FA"
+                tds_dias = ""
+                for mi, md in enumerate(bloque):
+                    cell_bg = fest_bg if md.get("especial") else bg
+                    tds_dias += (
+                        f'<td class="d" style="background:{cell_bg};text-align:center;'
+                        f'font-weight:bold;">{_esc(slice_m[mi])}</td>'
+                    )
+                label = f"Subtotal empresa · {_esc(r.get('nombre') or '')}"
+                body_rows.append(
+                    f'<tr class="subtotal-empresa" style="background:{bg};font-weight:bold;'
+                    f'page-break-before:avoid;">'
+                    f'<td></td><td colspan="3">{label}</td>'
+                    f"{tds_dias}"
+                    f'<td style="text-align:center;">{_esc(r.get("total"))}</td>'
+                    f"</tr>"
+                )
+                continue
+
+            if kind == "total":
+                bg, fg = t1.get("bg") or "#0077B6", t1.get("text") or "#FFFFFF"
+                tds_dias = "".join(
+                    f'<td class="d" style="background:{bg};color:{fg};text-align:center;'
+                    f'font-weight:bold;">{_esc(slice_m[mi])}</td>'
+                    for mi in range(len(bloque))
+                )
+                body_rows.append(
+                    f'<tr class="total" style="background:{bg};color:{fg};font-weight:bold;">'
+                    f'<td></td><td colspan="3">Total general</td>'
+                    f"{tds_dias}"
+                    f'<td style="text-align:center;">{_esc(r.get("total"))}</td>'
+                    f"</tr>"
+                )
+                continue
+
             bg = "#FFFFFF" if ri % 2 == 0 else "#F8FAFC"
             tds_dias = ""
             for mi, md in enumerate(bloque):
@@ -651,12 +877,13 @@ def _piezas_presencia(payload: dict) -> dict:
                     f"</tr>"
                 )
             else:
+                tipo_eq = r.get("tipo_equipo") if r.get("tipo_equipo") is not None else r.get("tipo")
                 body_rows.append(
                     f'<tr style="background:{bg};">'
                     f'<td style="text-align:center;">{_esc(r.get("no"))}</td>'
                     f'<td>{_esc(r.get("nombre"))}</td>'
                     f'<td style="text-align:center;">{_esc(r.get("identificacion"))}</td>'
-                    f'<td>{_esc(r.get("tipo"))}</td>'
+                    f'<td>{_esc(tipo_eq)}</td>'
                     f"{tds_dias}"
                     f'<td style="text-align:center;font-weight:bold;">{_esc(r.get("total"))}</td>'
                     f"</tr>"
@@ -930,9 +1157,65 @@ def generar_docx_presencia(payload: dict) -> bytes:
                     run.font.size = Pt(5)
 
         for ri, r in enumerate(filas):
+            kind = str(r.get("tipo") or "detalle")
+            if kind not in ("empresa", "subtotal_empresa", "total", "detalle"):
+                kind = "detalle"
             marcas = list(r.get("marcas") or [])[start:end]
             while len(marcas) < len(bloque):
                 marcas.append("")
+            row = table.rows[ri + 1]
+
+            if kind == "empresa":
+                try:
+                    row.cells[0].merge(row.cells[len(headers) - 1])
+                except Exception:
+                    pass
+                cell = row.cells[0]
+                cell.text = _texto_unicode(r.get("nombre") or EMPRESA_SIN_NOMBRE)
+                _shade(cell, "0077B6")
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.bold = True
+                        run.font.size = Pt(6)
+                        run.font.color.rgb = None
+                continue
+
+            if kind == "subtotal_empresa":
+                vals = [
+                    "",
+                    f"Subtotal empresa · {r.get('nombre') or ''}",
+                    "",
+                    "",
+                    *marcas,
+                    str(r.get("total") or 0),
+                ]
+                for ci, val in enumerate(vals):
+                    cell = row.cells[ci]
+                    cell.text = _texto_unicode(val)
+                    fill = (
+                        "FED7AA"
+                        if (ci >= 4 and ci < 4 + len(bloque) and bloque[ci - 4].get("especial"))
+                        else "E5F4FA"
+                    )
+                    _shade(cell, fill)
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.bold = True
+                            run.font.size = Pt(5)
+                continue
+
+            if kind == "total":
+                vals = ["", "Total general", "", "", *marcas, str(r.get("total") or 0)]
+                for ci, val in enumerate(vals):
+                    cell = row.cells[ci]
+                    cell.text = _texto_unicode(val)
+                    _shade(cell, "0077B6")
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.bold = True
+                            run.font.size = Pt(5)
+                continue
+
             if fijas_personal:
                 vals = [
                     str(r.get("no") or ""),
@@ -943,16 +1226,17 @@ def generar_docx_presencia(payload: dict) -> bytes:
                     str(r.get("total") or 0),
                 ]
             else:
+                tipo_eq = r.get("tipo_equipo") if r.get("tipo_equipo") is not None else r.get("tipo")
                 vals = [
                     str(r.get("no") or ""),
                     r.get("nombre") or "",
                     r.get("identificacion") or "",
-                    r.get("tipo") or "",
+                    tipo_eq or "",
                     *marcas,
                     str(r.get("total") or 0),
                 ]
             for ci, val in enumerate(vals):
-                cell = table.rows[ri + 1].cells[ci]
+                cell = row.cells[ci]
                 cell.text = _texto_unicode(val)
                 if ci >= 4 and ci < 4 + len(bloque) and bloque[ci - 4].get("especial"):
                     _shade(cell, "FED7AA")
