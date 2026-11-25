@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BookOpen, CalendarDays, Percent, Truck, Users,
+  BookOpen, CalendarDays, Clock, Percent, Truck, Users,
 } from 'lucide-react'
 import ModuloDataRefreshBar from '../../components/ModuloDataRefreshBar'
 import { useModulo } from '../../context/ModuloContext'
 import BitacoraAsistenciaRrhhToggle from './BitacoraAsistenciaRrhhToggle'
+import BitacoraHorasExtraExportModal from './BitacoraHorasExtraExportModal'
 import { accesoBitacora } from './bitacoraPermisos'
 import ExternosDepuracionModal from './ExternosDepuracionModal'
 import MaquinariaCatalogoModal from './MaquinariaCatalogoModal'
@@ -87,9 +88,13 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
   const [cumplimientoOpen, setCumplimientoOpen] = useState(false)
   const [detalleCumplimientoId, setDetalleCumplimientoId] = useState(null)
   const [vistaPlan, setVistaPlan] = useState(false)
+  const [horasExtraOpen, setHorasExtraOpen] = useState(false)
   const api = useMemo(
     () => (token && cid != null ? createSeguimientoApi(cid, token) : null),
     [cid, token],
+  )
+  const canExportHorasExtra = Boolean(
+    permisosBitacora?.exportar || permisosBitacora?.ver,
   )
 
   const doRefresh = useCallback(async () => {
@@ -225,6 +230,20 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
                 <Truck size={17} strokeWidth={2.3} aria-hidden />
               </button>
             )}
+            {canExportHorasExtra && api && (
+              <button
+                type="button"
+                onClick={withTipHide(() => setHorasExtraOpen(true))}
+                title="Informe de horas extras del personal"
+                data-cc-tooltip="Informe de horas extras"
+                data-cc-tooltip-variant="short"
+                aria-label="Informe de horas extras del personal"
+                data-testid="bitacora-horas-extra-btn"
+                style={toolbarIconBtn(t, { active: horasExtraOpen })}
+              >
+                <Clock size={17} strokeWidth={2.3} aria-hidden />
+              </button>
+            )}
           </div>
 
           <button
@@ -355,6 +374,14 @@ export default function ModuloSeguimiento({ t, usuario, token, contratoId }) {
           onClose={() => setMaquinariaCatalogoOpen(false)}
         />
       )}
+
+      <BitacoraHorasExtraExportModal
+        open={horasExtraOpen}
+        onClose={() => setHorasExtraOpen(false)}
+        t={t}
+        api={api}
+        usuario={usuario}
+      />
     </div>
   )
 }

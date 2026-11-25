@@ -203,10 +203,16 @@ def opciones_informe_horas_extra(
     *,
     fecha_desde: str,
     fecha_hasta: str,
+    empresa_key: Optional[str] = None,
 ) -> dict:
+    """Empresas + usuarios; si viene empresa_key, también filas de preview."""
     from seguimiento_service import list_usuarios_contrato_enriquecidos
 
     diarios = list_diarios_rango(sb, contrato_id, fecha_desde, fecha_hasta)
+    try:
+        horario_contrato = get_horario_contrato(sb, int(contrato_id))
+    except Exception:
+        horario_contrato = None
     usuarios = list_usuarios_contrato_enriquecidos(sb, int(contrato_id)) or []
     usuarios_out = []
     for u in usuarios:
@@ -221,9 +227,19 @@ def opciones_informe_horas_extra(
             "cargo": _usuario_cargo(u),
             "email": u.get("email") or "",
         })
+    empresas = empresas_con_personal_reportado(diarios)
+    filas: List[dict] = []
+    emp = str(empresa_key or "").strip()
+    if emp:
+        filas = construir_filas_horas_extra(
+            diarios,
+            empresa_key=emp,
+            horario_contrato=horario_contrato,
+        )
     return {
-        "empresas": empresas_con_personal_reportado(diarios),
+        "empresas": empresas,
         "usuarios": usuarios_out,
+        "filas": filas,
         "diarios_count": len(diarios),
         "formato": {
             "codigo": CODIGO_FORMATO_HORAS_EXTRA,
