@@ -13,6 +13,7 @@ import PlanActividadDetalleModal from './PlanActividadDetalleModal'
 import PlanActividadesEquipoVista from './PlanActividadesEquipoVista'
 import PlanActividadesExportModal from './PlanActividadesExportModal'
 import { resolverPeriodo } from './planActividadesEquipo'
+import { marcaCalendarioFecha, CALENDARIO_FESTIVO_LEGEND } from '../../utils/festivosColombia'
 
 function iconBtn(t, active = false) {
   return {
@@ -503,23 +504,33 @@ export default function PlanActividadesVista({
                     {c.label}
                   </th>
                 ))}
-                {ganttOpen && gantt.days.map((d) => (
-                  <th
-                    key={d}
-                    style={{
-                      ...ui.th,
-                      minWidth: 28,
-                      width: 28,
-                      maxWidth: 36,
-                      padding: '4px 0',
-                      textAlign: 'center',
-                      fontSize: 9,
-                    }}
-                    title={d}
-                  >
-                    {d.slice(8)}
-                  </th>
-                ))}
+                {ganttOpen && gantt.days.map((d) => {
+                  const marca = marcaCalendarioFecha(d)
+                  return (
+                    <th
+                      key={d}
+                      style={{
+                        ...ui.th,
+                        minWidth: 28,
+                        width: 28,
+                        maxWidth: 36,
+                        padding: '4px 0',
+                        textAlign: 'center',
+                        fontSize: 9,
+                        background: marca
+                          ? `color-mix(in srgb, ${CALENDARIO_FESTIVO_LEGEND.color} 18%, transparent)`
+                          : undefined,
+                        color: marca ? CALENDARIO_FESTIVO_LEGEND.color : undefined,
+                        fontWeight: marca ? 800 : undefined,
+                      }}
+                      title={marca ? `${d} · ${marca.tooltip}` : d}
+                      data-cc-tooltip={marca?.tooltip || undefined}
+                      data-cc-tooltip-variant={marca ? 'short' : undefined}
+                    >
+                      {d.slice(8)}
+                    </th>
+                  )
+                })}
               </tr>
             </thead>
             <tbody>

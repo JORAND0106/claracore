@@ -3749,6 +3749,33 @@ body:has(.cc-claragis-root) .cc-app-header {
   display: none !important;
 }
 
+/* Domingo / festivo Colombia (informativo; no bloquea acciones) */
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--festivo,
+.cc-seguim-cal-shell .fc-timegrid-col.cc-seguim-cal-day--festivo,
+.cc-seguim-cal-shell .fc-col-header-cell.cc-seguim-cal-day--festivo {
+  background: color-mix(in srgb, #ea580c 12%, transparent) !important;
+}
+
+.cc-seguim-cal-shell .fc-col-header-cell.cc-seguim-cal-day--festivo a,
+.cc-seguim-cal-shell .fc-col-header-cell.cc-seguim-cal-day--festivo .fc-col-header-cell-cushion {
+  color: #c2410c !important;
+  font-weight: 800;
+}
+
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--festivo .cc-seguim-cal-daynum {
+  color: #c2410c !important;
+  font-weight: 800;
+}
+
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--festivo .cc-seguim-cal-daycount {
+  color: color-mix(in srgb, #c2410c 70%, var(--cc-seguim-fc-muted, #64748b));
+}
+
+/* Vencido gana el fondo; borde naranja indica además domingo/festivo */
+.cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido.cc-seguim-cal-day--festivo {
+  box-shadow: inset 3px 0 0 #ea580c;
+}
+
 .cc-seguim-cal-shell .fc-daygrid-day.cc-seguim-cal-day--vencido {
   background: color-mix(in srgb, #dc2626 14%, transparent) !important;
 }

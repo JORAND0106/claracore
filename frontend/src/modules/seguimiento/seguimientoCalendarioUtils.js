@@ -67,6 +67,10 @@ export const CALENDARIO_VENCIDOS_LEGEND = {
   tooltip: 'El día tiene al menos una tarea o compromiso vencido',
 }
 
+/** Reexport: domingo / festivo Colombia (convención de celda, no evento). */
+export { CALENDARIO_FESTIVO_LEGEND } from '../../utils/festivosColombia.js'
+export { marcaCalendarioFecha } from '../../utils/festivosColombia.js'
+
 /** Formatea Date o ISO a YYYY-MM-DD (local calendar day). */
 export function toDateOnly(value) {
   if (!value) return ''
