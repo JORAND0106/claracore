@@ -6,6 +6,8 @@ import {
   horasLaborablesDia,
   horasSemanales,
   normalizeHorario,
+  NOCTURNO_FIN_DEFAULT,
+  NOCTURNO_INICIO_DEFAULT,
 } from '../modules/seguimiento/bitacoraHorario'
 
 export default function ContratoHorarioEditor({
@@ -27,6 +29,13 @@ export default function ContratoHorarioEditor({
       next.dias[key].almuerzo_inicio = ''
       next.dias[key].almuerzo_fin = ''
     }
+    onChange?.(next)
+  }
+
+  const patchNocturno = (field, value) => {
+    if (disabled) return
+    const next = normalizeHorario(horario)
+    next[field] = value || (field === 'nocturno_inicio' ? NOCTURNO_INICIO_DEFAULT : NOCTURNO_FIN_DEFAULT)
     onChange?.(next)
   }
 
@@ -53,6 +62,53 @@ export default function ContratoHorarioEditor({
         cuando está definido. Rige desde la fecha en que guarde el contrato;
         las bitácoras ya registradas conservan el horario con que se diligenciaron.
         Sin horario configurado se usa 07:30–16:30 (Lun–Vie) con almuerzo 12:00–13:00.
+        La franja nocturna (por defecto 19:00–06:00) clasifica el tiempo extra;
+        ajústela solo si la norma o el contrato lo requieren.
+      </div>
+
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 12,
+        alignItems: 'flex-end',
+        marginBottom: 14,
+        padding: '10px 12px',
+        borderRadius: 8,
+        border: `1px solid ${t?.border || '#e2e8f0'}`,
+        background: t?.inputBg || '#f8fafc',
+      }}>
+        <div style={{
+          fontWeight: 800,
+          fontSize: 12,
+          color: t?.textMuted || '#64748b',
+          textTransform: 'uppercase',
+          letterSpacing: '0.03em',
+          width: '100%',
+        }}>
+          Horario nocturno (tiempo extra)
+        </div>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: t?.textMuted || '#64748b' }}>
+          Inicio nocturno
+          <input
+            type="time"
+            value={horario.nocturno_inicio || NOCTURNO_INICIO_DEFAULT}
+            disabled={disabled}
+            onChange={(e) => patchNocturno('nocturno_inicio', e.target.value)}
+            aria-label="Inicio de horario nocturno"
+            style={{ ...cellInp, width: 130 }}
+          />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: t?.textMuted || '#64748b' }}>
+          Fin nocturno
+          <input
+            type="time"
+            value={horario.nocturno_fin || NOCTURNO_FIN_DEFAULT}
+            disabled={disabled}
+            onChange={(e) => patchNocturno('nocturno_fin', e.target.value)}
+            aria-label="Fin de horario nocturno"
+            style={{ ...cellInp, width: 130 }}
+          />
+        </label>
       </div>
 
       <div style={{ overflowX: 'auto' }}>

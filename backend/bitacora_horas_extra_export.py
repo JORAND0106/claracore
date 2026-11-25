@@ -14,10 +14,18 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from bitacora_export_rango import list_diarios_rango
+from bitacora_he_clasificacion import clasificar_tiempo_extra
 from bitacora_horario import calcular_horas_extra, get_horario_contrato, normalize_horario
 from bitacora_pdf import _palette
 from bitacora_service import contrato_meta_bitacora
 from topografia_utils import to_pdf_bytes
+
+_EXTRA_KEYS = (
+    "extra_diurna",
+    "extra_nocturna",
+    "extra_festiva_diurna",
+    "extra_festiva_nocturna",
+)
 
 _log = logging.getLogger("claracore.bitacora.horas_extra")
 
@@ -94,13 +102,13 @@ def _fmt_hora(raw: Any) -> str:
     return s[:5]
 
 
-def _fmt_extra(n: float) -> str:
+def _fmt_extra(n: float, *, blank_zero: bool = False) -> str:
     try:
         v = float(n)
     except (TypeError, ValueError):
-        return "0.00"
+        return "" if blank_zero else "0.00"
     if v <= 0:
-        return "0.00"
+        return "" if blank_zero else "0.00"
     return f"{v:.2f}"
 
 
@@ -139,10 +147,29 @@ def _extra_de_fila(row: dict, *, horario, fecha_iso: str) -> float:
             hora_ingreso=row.get("hora_ingreso"),
             hora_salida=row.get("hora_salida"),
             horario=horario,
-            fecha_iso=fecha_iso,
+            fecha=fecha_iso,
         ) or 0)
     except Exception:
         return 0.0
+
+
+def _clasificar_fila(row: dict, *, horario, fecha_iso: str, total_extra: float) -> dict:
+    try:
+        return clasificar_tiempo_extra(
+            hora_ingreso=row.get("hora_ingreso"),
+            hora_salida=row.get("hora_salida"),
+            fecha=fecha_iso,
+            horario=horario,
+            total_extra=total_extra,
+        )
+    except Exception:
+        return {
+            "extra_diurna": round(float(total_extra or 0), 2),
+            "extra_nocturna": 0.0,
+            "extra_festiva_diurna": 0.0,
+            "extra_festiva_nocturna": 0.0,
+            "tiempo_extra": round(float(total_extra or 0), 2),
+        }
 
 
 def _justificacion(row: dict) -> str:
@@ -198,12 +225,17 @@ def construir_filas_horas_extra(
             extra = _extra_de_fila(a, horario=horario, fecha_iso=fecha)
             if extra <= 0:
                 continue
+            tipos = _clasificar_fila(a, horario=horario, fecha_iso=fecha, total_extra=extra)
             out.append({
                 "nombre": nombre,
                 "documento": re.sub(r"\D+", "", str(a.get("documento_numero") or "")) or "—",
                 "fecha": fecha,
                 "hora_inicio": _fmt_hora(a.get("hora_ingreso")),
                 "hora_fin": _fmt_hora(a.get("hora_salida")),
+                "extra_diurna": float(tipos.get("extra_diurna") or 0),
+                "extra_nocturna": float(tipos.get("extra_nocturna") or 0),
+                "extra_festiva_diurna": float(tipos.get("extra_festiva_diurna") or 0),
+                "extra_festiva_nocturna": float(tipos.get("extra_festiva_nocturna") or 0),
                 "tiempo_extra": extra,
                 "observacion": _justificacion(a) or "—",
                 "empresa": empresa,
@@ -251,8 +283,10 @@ def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
 
     vista: List[dict] = []
     total_general = 0.0
+    total_buckets = {k: 0.0 for k in _EXTRA_KEYS}
     for idx, (nombre, documento, rows) in enumerate(groups, 1):
         subtotal = 0.0
+        sub_buckets = {k: 0.0 for k in _EXTRA_KEYS}
         for r in rows:
             try:
                 extra = float(r.get("tiempo_extra") or 0)
@@ -260,7 +294,18 @@ def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
                 extra = 0.0
             if extra < 0:
                 extra = 0.0
+            buckets = {}
+            for k in _EXTRA_KEYS:
+                try:
+                    buckets[k] = max(0.0, float(r.get(k) or 0))
+                except (TypeError, ValueError):
+                    buckets[k] = 0.0
+            # Si faltan tipos (filas legacy de test), todo a diurna.
+            if extra > 0 and sum(buckets.values()) <= 0:
+                buckets["extra_diurna"] = extra
             subtotal += extra
+            for k in _EXTRA_KEYS:
+                sub_buckets[k] += buckets[k]
             vista.append({
                 "tipo": "detalle",
                 "no": idx,
@@ -269,12 +314,15 @@ def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
                 "fecha": r.get("fecha") or "",
                 "hora_inicio": r.get("hora_inicio") or "—",
                 "hora_fin": r.get("hora_fin") or "—",
+                **{k: round(buckets[k], 2) for k in _EXTRA_KEYS},
                 "tiempo_extra": extra,
                 "observacion": r.get("observacion") or "—",
                 "empresa": r.get("empresa"),
                 "empresa_key": r.get("empresa_key"),
             })
         total_general += subtotal
+        for k in _EXTRA_KEYS:
+            total_buckets[k] += sub_buckets[k]
         vista.append({
             "tipo": "subtotal",
             "no": "",
@@ -283,6 +331,7 @@ def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
             "fecha": "",
             "hora_inicio": "",
             "hora_fin": "",
+            **{k: round(sub_buckets[k], 2) for k in _EXTRA_KEYS},
             "tiempo_extra": round(subtotal, 2),
             "observacion": "Subtotal",
         })
@@ -295,6 +344,7 @@ def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
         "fecha": "",
         "hora_inicio": "",
         "hora_fin": "",
+        **{k: round(total_buckets[k], 2) for k in _EXTRA_KEYS},
         "tiempo_extra": round(total_general, 2),
         "observacion": "Total general",
     })
@@ -596,6 +646,15 @@ def _html_informe(payload: dict) -> str:
         )
     t_logo = _time.perf_counter()
 
+    def _cols_extra(r: dict) -> str:
+        return "".join(
+            "<td style=\"text-align:center;\">%s</td>" % _esc(_fmt_extra(r.get(k), blank_zero=True))
+            for k in _EXTRA_KEYS
+        ) + (
+            "<td style=\"text-align:center;font-weight:bold;\">%s</td>"
+            % _esc(_fmt_extra(r.get("tiempo_extra"), blank_zero=True))
+        )
+
     body_rows: List[str] = []
     total_row_html = ""
     det_i = 0
@@ -608,12 +667,12 @@ def _html_informe(payload: dict) -> str:
                 "page-break-before:avoid;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Subtotal · %s</td>"
-                "<td style=\"text-align:center;\">%s</td>"
+                "%s"
                 "<td></td>"
                 "</tr>" % (
                     bg,
                     _esc(r.get("nombre") or ""),
-                    _esc(_fmt_extra(r.get("tiempo_extra"))),
+                    _cols_extra(r),
                 )
             )
             continue
@@ -625,12 +684,12 @@ def _html_informe(payload: dict) -> str:
                 "page-break-after:avoid;-pdf-keep-with-next:true;\">"
                 "<td style=\"text-align:center;\"></td>"
                 "<td colspan=\"5\">Total general</td>"
-                "<td style=\"text-align:center;\">%s</td>"
+                "%s"
                 "<td></td>"
                 "</tr>" % (
                     bg,
                     fg,
-                    _esc(_fmt_extra(r.get("tiempo_extra"))),
+                    _cols_extra(r),
                 )
             )
             continue
@@ -644,7 +703,7 @@ def _html_informe(payload: dict) -> str:
             "<td style=\"text-align:center;\">%s</td>"
             "<td style=\"text-align:center;\">%s</td>"
             "<td style=\"text-align:center;\">%s</td>"
-            "<td style=\"text-align:center;font-weight:bold;\">%s</td>"
+            "%s"
             "<td>%s</td>"
             "</tr>" % (
                 bg,
@@ -654,7 +713,7 @@ def _html_informe(payload: dict) -> str:
                 _esc(_fmt_fecha_es(r.get("fecha"))),
                 _esc(r.get("hora_inicio")),
                 _esc(r.get("hora_fin")),
-                _esc(_fmt_extra(r.get("tiempo_extra"))),
+                _cols_extra(r),
                 _esc(r.get("observacion")),
             )
         )
@@ -695,14 +754,18 @@ def _html_informe(payload: dict) -> str:
     thead_html = """
 <thead>
 <tr>
-  <th style="width:5%;">No</th>
-  <th style="width:20%;">Nombre colaborador</th>
-  <th style="width:11%;">No. Documento</th>
-  <th style="width:9%;">Fecha</th>
-  <th style="width:11%;">Hora de inicio de jornada</th>
-  <th style="width:11%;">Hora fin de jornada</th>
-  <th style="width:9%;">Tiempo extra</th>
-  <th style="width:24%;">Observación</th>
+  <th style="width:3%;">No</th>
+  <th style="width:14%;">Nombre colaborador</th>
+  <th style="width:8%;">No. Documento</th>
+  <th style="width:7%;">Fecha</th>
+  <th style="width:7%;">Hora de inicio de jornada</th>
+  <th style="width:7%;">Hora fin de jornada</th>
+  <th style="width:7%;">Extra diurna</th>
+  <th style="width:7%;">Extra nocturna</th>
+  <th style="width:8%;">Extra festiva diurna</th>
+  <th style="width:8%;">Extra festiva nocturna</th>
+  <th style="width:7%;">Total tiempo extra</th>
+  <th style="width:17%;">Observación</th>
 </tr>
 </thead>"""
 
@@ -751,7 +814,7 @@ def _html_informe(payload: dict) -> str:
     margin: 0;
     padding: 0;
     font-family: Helvetica, Arial, sans-serif;
-    font-size: 8.5pt;
+    font-size: 7pt;
     color: #0F2942;
   }}
   .hdr {{ width: 100%; margin: 0 0 4pt 0; }}
@@ -768,18 +831,18 @@ def _html_informe(payload: dict) -> str:
   .meta {{ width: 100%; margin: 0 0 4pt 0; font-size: 8pt; }}
   .meta td {{ border: 0.6pt solid #94A3B8; padding: 4pt 6pt; }}
   .meta .lbl {{ font-weight: bold; background: {t2["bg"]}; color: {t2["text"]}; width: 18%; }}
-  table.grid {{ width: 100%; font-size: 7pt; margin: 0; }}
+  table.grid {{ width: 100%; font-size: 6pt; margin: 0; }}
   table.grid th, table.grid td {{
     border: 0.6pt solid #64748B;
-    padding: 1.5pt 3pt;
+    padding: 1pt 2pt;
     word-wrap: break-word;
     vertical-align: middle;
-    line-height: 1.15;
+    line-height: 1.1;
   }}
   table.grid th {{
     background: {t2["bg"]};
     color: {t2["text"]};
-    font-size: 6pt;
+    font-size: 5.5pt;
     font-weight: bold;
   }}
   table.grid thead {{ display: table-header-group; }}
@@ -926,13 +989,15 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
 
     headers = [
         "No", "Nombre colaborador", "No. Documento", "Fecha",
-        "Hora de inicio de jornada", "Hora fin de jornada", "Tiempo extra", "Observación",
+        "Hora de inicio de jornada", "Hora fin de jornada",
+        "Extra diurna", "Extra nocturna", "Extra festiva diurna", "Extra festiva nocturna",
+        "Total tiempo extra", "Observación",
     ]
     filas = payload.get("filas") or []
     table = doc.add_table(rows=1 + len(filas), cols=len(headers))
     table.style = "Table Grid"
-    cell_pt = Pt(6.5)  # −1.5 pt vs 8 pt anterior
-    head_pt = Pt(6)
+    cell_pt = Pt(5.5)
+    head_pt = Pt(5)
     for i, h in enumerate(headers):
         cell = table.rows[0].cells[i]
         cell.text = h
@@ -971,7 +1036,8 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
                 "",
                 "",
                 "",
-                _fmt_extra(r.get("tiempo_extra")),
+                *[_fmt_extra(r.get(k), blank_zero=True) for k in _EXTRA_KEYS],
+                _fmt_extra(r.get("tiempo_extra"), blank_zero=True),
                 "",
             ]
             fill = "E5F4FA"
@@ -984,7 +1050,8 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
                 "",
                 "",
                 "",
-                _fmt_extra(r.get("tiempo_extra")),
+                *[_fmt_extra(r.get(k), blank_zero=True) for k in _EXTRA_KEYS],
+                _fmt_extra(r.get("tiempo_extra"), blank_zero=True),
                 "",
             ]
             fill = "0077B6"
@@ -997,7 +1064,8 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
                 _fmt_fecha_es(r.get("fecha")),
                 r.get("hora_inicio") or "",
                 r.get("hora_fin") or "",
-                _fmt_extra(r.get("tiempo_extra")),
+                *[_fmt_extra(r.get(k), blank_zero=True) for k in _EXTRA_KEYS],
+                _fmt_extra(r.get("tiempo_extra"), blank_zero=True),
                 r.get("observacion") or "",
             ]
             fill = None
