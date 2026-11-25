@@ -173,8 +173,95 @@ def construir_filas_horas_extra(
                 "empresa_key": _key_empresa(empresa),
             })
 
-    out.sort(key=lambda r: (r["fecha"], r["nombre"].lower(), r.get("documento") or ""))
+    # Agrupar por colaborador: nombre → documento → fechas cronológicas.
+    out.sort(key=lambda r: (
+        r["nombre"].lower(),
+        r.get("documento") or "",
+        r["fecha"],
+    ))
     return out
+
+
+def filas_informe_agrupadas(filas: List[dict]) -> List[dict]:
+    """
+    Convierte filas detalle en filas de vista:
+      - detalle (No = índice de colaborador; nombre/doc en cada fila)
+      - subtotal por colaborador
+      - total general al final
+    """
+    if not filas:
+        return []
+
+    groups: List[Tuple[str, str, List[dict]]] = []
+    cur_key: Optional[Tuple[str, str]] = None
+    cur_rows: List[dict] = []
+    for r in filas:
+        if not isinstance(r, dict):
+            continue
+        key = (str(r.get("nombre") or "").strip(), str(r.get("documento") or "").strip())
+        if cur_key is None:
+            cur_key = key
+            cur_rows = [r]
+            continue
+        if key != cur_key:
+            groups.append((cur_key[0], cur_key[1], cur_rows))
+            cur_key = key
+            cur_rows = [r]
+        else:
+            cur_rows.append(r)
+    if cur_key is not None and cur_rows:
+        groups.append((cur_key[0], cur_key[1], cur_rows))
+
+    vista: List[dict] = []
+    total_general = 0.0
+    for idx, (nombre, documento, rows) in enumerate(groups, 1):
+        subtotal = 0.0
+        for r in rows:
+            try:
+                extra = float(r.get("tiempo_extra") or 0)
+            except (TypeError, ValueError):
+                extra = 0.0
+            if extra < 0:
+                extra = 0.0
+            subtotal += extra
+            vista.append({
+                "tipo": "detalle",
+                "no": idx,
+                "nombre": nombre,
+                "documento": documento or "—",
+                "fecha": r.get("fecha") or "",
+                "hora_inicio": r.get("hora_inicio") or "—",
+                "hora_fin": r.get("hora_fin") or "—",
+                "tiempo_extra": extra,
+                "observacion": r.get("observacion") or "—",
+                "empresa": r.get("empresa"),
+                "empresa_key": r.get("empresa_key"),
+            })
+        total_general += subtotal
+        vista.append({
+            "tipo": "subtotal",
+            "no": "",
+            "nombre": nombre,
+            "documento": documento or "—",
+            "fecha": "",
+            "hora_inicio": "",
+            "hora_fin": "",
+            "tiempo_extra": round(subtotal, 2),
+            "observacion": "Subtotal",
+        })
+
+    vista.append({
+        "tipo": "total",
+        "no": "",
+        "nombre": "",
+        "documento": "",
+        "fecha": "",
+        "hora_inicio": "",
+        "hora_fin": "",
+        "tiempo_extra": round(total_general, 2),
+        "observacion": "Total general",
+    })
+    return vista
 
 
 def empresas_con_personal_reportado(diarios: List[dict]) -> List[dict]:
@@ -231,11 +318,12 @@ def opciones_informe_horas_extra(
     filas: List[dict] = []
     emp = str(empresa_key or "").strip()
     if emp:
-        filas = construir_filas_horas_extra(
+        detalle = construir_filas_horas_extra(
             diarios,
             empresa_key=emp,
             horario_contrato=horario_contrato,
         )
+        filas = filas_informe_agrupadas(detalle)
     return {
         "empresas": empresas,
         "usuarios": usuarios_out,
@@ -288,15 +376,16 @@ def construir_informe_horas_extra(
     except Exception:
         horario_contrato = None
 
-    filas = construir_filas_horas_extra(
+    detalle = construir_filas_horas_extra(
         diarios,
         empresa_key=empresa_key,
         horario_contrato=horario_contrato,
     )
-    if not filas:
+    if not detalle:
         raise ValueError(
             "No hay tiempo extra registrado para el rango y la empresa seleccionados."
         )
+    filas = filas_informe_agrupadas(detalle)
 
     contrato = contrato_meta_bitacora(sb, int(contrato_id)) or {}
     usuarios = list_usuarios_contrato_enriquecidos(sb, int(contrato_id)) or []
@@ -310,7 +399,7 @@ def construir_informe_horas_extra(
         None,
     )
     if not emp_nombre:
-        emp_nombre = filas[0].get("empresa") or EMPRESA_SIN_NOMBRE
+        emp_nombre = detalle[0].get("empresa") or EMPRESA_SIN_NOMBRE
 
     return {
         "contrato": contrato,
@@ -365,8 +454,42 @@ def _html_informe(payload: dict) -> str:
         )
 
     body_rows = []
-    for i, r in enumerate(filas, 1):
-        bg = "#FFFFFF" if i % 2 else "#F8FAFC"
+    det_i = 0
+    for r in filas:
+        tipo = str(r.get("tipo") or "detalle")
+        if tipo == "subtotal":
+            bg = t2.get("bg") or "#E5F4FA"
+            body_rows.append(
+                "<tr style=\"background:%s;font-weight:bold;page-break-inside:avoid;\">"
+                "<td style=\"text-align:center;\"></td>"
+                "<td colspan=\"5\">Subtotal · %s</td>"
+                "<td style=\"text-align:center;\">%s</td>"
+                "<td></td>"
+                "</tr>" % (
+                    bg,
+                    _esc(r.get("nombre") or ""),
+                    _esc(_fmt_extra(r.get("tiempo_extra"))),
+                )
+            )
+            continue
+        if tipo == "total":
+            bg = t1.get("bg") or "#0077B6"
+            fg = t1.get("text") or "#FFFFFF"
+            body_rows.append(
+                "<tr style=\"background:%s;color:%s;font-weight:bold;page-break-inside:avoid;\">"
+                "<td style=\"text-align:center;\"></td>"
+                "<td colspan=\"5\">Total general</td>"
+                "<td style=\"text-align:center;\">%s</td>"
+                "<td></td>"
+                "</tr>" % (
+                    bg,
+                    fg,
+                    _esc(_fmt_extra(r.get("tiempo_extra"))),
+                )
+            )
+            continue
+        det_i += 1
+        bg = "#FFFFFF" if det_i % 2 else "#F8FAFC"
         body_rows.append(
             "<tr style=\"background:%s;\">"
             "<td style=\"text-align:center;\">%s</td>"
@@ -379,7 +502,7 @@ def _html_informe(payload: dict) -> str:
             "<td>%s</td>"
             "</tr>" % (
                 bg,
-                i,
+                _esc(r.get("no") if r.get("no") not in (None, "") else ""),
                 _esc(r.get("nombre")),
                 _esc(r.get("documento")),
                 _esc(_fmt_fecha_es(r.get("fecha"))),
@@ -420,17 +543,18 @@ def _html_informe(payload: dict) -> str:
   .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 8pt; font-size: 8pt; }}
   .meta td {{ border: 0.6pt solid #94A3B8; padding: 4pt 6pt; }}
   .meta .lbl {{ font-weight: bold; background: {t2["bg"]}; color: {t2["text"]}; width: 18%; }}
-  table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+  table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7pt; }}
   table.grid th, table.grid td {{
     border: 0.6pt solid #64748B;
-    padding: 3pt 4pt;
+    padding: 1.5pt 3pt;
     word-wrap: break-word;
-    vertical-align: top;
+    vertical-align: middle;
+    line-height: 1.15;
   }}
   table.grid th {{
     background: {t2["bg"]};
     color: {t2["text"]};
-    font-size: 7.5pt;
+    font-size: 6pt;
     font-weight: bold;
   }}
   table.grid thead {{ display: table-header-group; }}
@@ -574,13 +698,17 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
     filas = payload.get("filas") or []
     table = doc.add_table(rows=1 + len(filas), cols=len(headers))
     table.style = "Table Grid"
+    cell_pt = Pt(6.5)  # −1.5 pt vs 8 pt anterior
+    head_pt = Pt(6)
     for i, h in enumerate(headers):
         cell = table.rows[0].cells[i]
         cell.text = h
         for p in cell.paragraphs:
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(0)
             for run in p.runs:
                 run.bold = True
-                run.font.size = Pt(8)
+                run.font.size = head_pt
         try:
             tc_pr = cell._tc.get_or_add_tcPr()
             shd = OxmlElement("w:shd")
@@ -590,23 +718,70 @@ def generar_docx_horas_extra(payload: dict) -> bytes:
         except Exception:
             pass
 
+    def _shade(cell, fill: str):
+        try:
+            tc_pr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:fill"), fill)
+            shd.set(qn("w:val"), "clear")
+            tc_pr.append(shd)
+        except Exception:
+            pass
+
     for ri, r in enumerate(filas):
-        vals = [
-            str(ri + 1),
-            r.get("nombre") or "",
-            r.get("documento") or "",
-            _fmt_fecha_es(r.get("fecha")),
-            r.get("hora_inicio") or "",
-            r.get("hora_fin") or "",
-            _fmt_extra(r.get("tiempo_extra")),
-            r.get("observacion") or "",
-        ]
+        tipo = str(r.get("tipo") or "detalle")
+        if tipo == "subtotal":
+            vals = [
+                "",
+                f"Subtotal · {r.get('nombre') or ''}",
+                r.get("documento") or "",
+                "",
+                "",
+                "",
+                _fmt_extra(r.get("tiempo_extra")),
+                "",
+            ]
+            fill = "E5F4FA"
+            bold = True
+        elif tipo == "total":
+            vals = [
+                "",
+                "Total general",
+                "",
+                "",
+                "",
+                "",
+                _fmt_extra(r.get("tiempo_extra")),
+                "",
+            ]
+            fill = "0077B6"
+            bold = True
+        else:
+            vals = [
+                str(r.get("no") if r.get("no") not in (None, "") else ""),
+                r.get("nombre") or "",
+                r.get("documento") or "",
+                _fmt_fecha_es(r.get("fecha")),
+                r.get("hora_inicio") or "",
+                r.get("hora_fin") or "",
+                _fmt_extra(r.get("tiempo_extra")),
+                r.get("observacion") or "",
+            ]
+            fill = None
+            bold = False
         for ci, val in enumerate(vals):
             cell = table.rows[ri + 1].cells[ci]
             cell.text = str(val)
+            if fill:
+                _shade(cell, fill)
             for p in cell.paragraphs:
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
                 for run in p.runs:
-                    run.font.size = Pt(8)
+                    run.font.size = cell_pt
+                    run.bold = bold
+                    if tipo == "total":
+                        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
     # Repeat header on each page
     try:

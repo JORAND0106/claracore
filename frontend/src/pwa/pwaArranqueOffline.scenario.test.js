@@ -22,7 +22,7 @@ const srcDir = join(root, 'src')
 describe('caso 42 · arranque PWA sin conexión', () => {
   it('SW usa caché primero para shell y assets (abre sin red)', () => {
     const sw = readFileSync(join(publicDir, 'sw.js'), 'utf8')
-    assert.match(sw, /claracore-shell-v15/)
+    assert.match(sw, /claracore-shell-v16/)
     assert.match(sw, /__CLARACORE_PRECACHE__/)
     assert.match(sw, /function cacheFirst/)
     assert.match(sw, /mode === 'navigate'/)

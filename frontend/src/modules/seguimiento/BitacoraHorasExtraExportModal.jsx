@@ -133,7 +133,8 @@ export default function BitacoraHorasExtraExportModal({
     return () => { cancelled = true }
   }, [open, api, fechaDesde, fechaHasta, empresaKey, usuario?.id])
 
-  const puedeDescargar = filas.length > 0 && !!empresaKey && !loading && !busy
+  const tieneDetalle = filas.some((r) => !r?.tipo || r.tipo === 'detalle')
+  const puedeDescargar = tieneDetalle && !!empresaKey && !loading && !busy
 
   const exportar = useCallback(async () => {
     if (!puedeDescargar || !api?.exportBitacoraHorasExtraBlob) return
@@ -394,8 +395,10 @@ export default function BitacoraHorasExtraExportModal({
               style={{
                 width: '100%',
                 borderCollapse: 'collapse',
-                fontSize: 'var(--cc-sm, 12px)',
+                /* −1.5 pt ≈ −2 px respecto a 12 px base */
+                fontSize: 'calc(var(--cc-sm, 12px) - 2px)',
                 color: text,
+                lineHeight: 1.2,
               }}
             >
               <thead>
@@ -409,7 +412,7 @@ export default function BitacoraHorasExtraExportModal({
                         zIndex: 1,
                         background: headBg,
                         border: `1px solid ${border}`,
-                        padding: '7px 8px',
+                        padding: '4px 6px',
                         textAlign: 'left',
                         fontWeight: 800,
                         whiteSpace: 'nowrap',
@@ -421,18 +424,38 @@ export default function BitacoraHorasExtraExportModal({
                 </tr>
               </thead>
               <tbody>
-                {filas.map((r, i) => (
-                  <tr key={`${r.fecha}-${r.documento}-${r.nombre}-${i}`}>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{i + 1}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.nombre}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.documento}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px', whiteSpace: 'nowrap' }}>{r.fecha}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.hora_inicio}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.hora_fin}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px', fontWeight: 700 }}>{fmtExtra(r.tiempo_extra)}</td>
-                    <td style={{ border: `1px solid ${border}`, padding: '5px 8px' }}>{r.observacion || '—'}</td>
-                  </tr>
-                ))}
+                {filas.map((r, i) => {
+                  const tipo = r.tipo || 'detalle'
+                  const isSub = tipo === 'subtotal'
+                  const isTot = tipo === 'total'
+                  const rowBg = isTot
+                    ? primary
+                    : isSub
+                      ? headBg
+                      : (i % 2 ? 'transparent' : (t?.bg || 'transparent'))
+                  const rowColor = isTot ? '#fff' : text
+                  const cell = {
+                    border: `1px solid ${border}`,
+                    padding: '3px 6px',
+                    fontWeight: (isSub || isTot) ? 800 : 400,
+                    color: rowColor,
+                    background: rowBg,
+                  }
+                  return (
+                    <tr key={`${tipo}-${r.fecha}-${r.documento}-${r.nombre}-${i}`}>
+                      <td style={cell}>{isSub || isTot ? '' : (r.no ?? '')}</td>
+                      <td style={cell}>
+                        {isSub ? `Subtotal · ${r.nombre || ''}` : isTot ? 'Total general' : r.nombre}
+                      </td>
+                      <td style={cell}>{isTot ? '' : (r.documento || '')}</td>
+                      <td style={{ ...cell, whiteSpace: 'nowrap' }}>{isSub || isTot ? '' : r.fecha}</td>
+                      <td style={cell}>{isSub || isTot ? '' : r.hora_inicio}</td>
+                      <td style={cell}>{isSub || isTot ? '' : r.hora_fin}</td>
+                      <td style={{ ...cell, fontWeight: 800 }}>{fmtExtra(r.tiempo_extra)}</td>
+                      <td style={cell}>{isSub || isTot ? '' : (r.observacion || '—')}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}
