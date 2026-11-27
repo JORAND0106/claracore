@@ -75,7 +75,16 @@ def _load_routes_with_stubs():
     main._require_contract_access = lambda *_a, **_k: None
     main.get_current_user = lambda: {}
     main.supabase = MagicMock()
+    main.registrar_log = lambda *_a, **_k: None
     sys.modules["main"] = main
+
+    audit = types.ModuleType("topografia_audit")
+    audit.ENTIDAD_PLANILLA_TUBERIA = "planilla_tuberia"
+    audit.contar_campos_modificados = lambda *_a, **_k: 0
+    audit.log_topo = lambda *_a, **_k: None
+    audit.snapshot_edicion_planilla_tuberia = lambda *_a, **_k: {}
+    audit.snapshot_planilla_tuberia = lambda *_a, **_k: {}
+    sys.modules["topografia_audit"] = audit
 
     perm = types.ModuleType("topografia_permissions")
     perm.require_permiso_topografia = lambda *_a, **_k: None
