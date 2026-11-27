@@ -14,6 +14,8 @@ from topografia_planilla_tuberia import (
     ITEMS_DESCUENTOS_FILTRO,
     _dim_resumen_2,
     _f,
+    _floor_area_2dec,
+    _floor_area_tubo_filtro_2dec,
     _label_desc_otros,
     _meta_item_cantidad,
     _meta_item_descuento,
@@ -204,9 +206,12 @@ def calcular_cantidades_y_descuentos_altura(
     tot = cartera.get("totales") or {}
     L = float(tot.get("longitud_m") or 0.0)
     B = float(seccion["ancho_excavacion_m"])
-    a1 = float(seccion["area_1_m2"])
-    a2 = float(seccion["area_2_m2"])
-    a_tub = float(seccion["area_tuberia_m2"])
+    a1 = float(_floor_area_2dec(seccion["area_1_m2"]) or 0.0)
+    a2 = 0.0 if tipo == "FILTRO" else float(_floor_area_2dec(seccion["area_2_m2"]) or 0.0)
+    if tipo == "FILTRO":
+        a_tub = float(_floor_area_tubo_filtro_2dec(seccion["area_tuberia_m2"]) or 0.0)
+    else:
+        a_tub = float(seccion["area_tuberia_m2"])
     h_exc = float(tot.get("prom_altura_excavacion") or 0.0)
     h_trit = float(tot.get("prom_altura_triturado") or 0.0)
     h_rel = float(tot.get("prom_altura_relleno") or 0.0)

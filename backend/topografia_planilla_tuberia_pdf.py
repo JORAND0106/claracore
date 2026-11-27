@@ -201,6 +201,8 @@ def html_franja_tramo_tuberia(
     area_2 = sec.get("area_2_m2")
     if area_2 is None:
         area_2 = st.get("area_2_m2")
+    if tipo == "FILTRO":
+        area_2 = 0.0
     rel = planilla.get("relacion_atraque") or sec.get("relacion_atraque") or "1:3"
     h_relleno = sec.get("altura_relleno_m")
     if h_relleno is None:
@@ -272,14 +274,14 @@ def html_franja_tramo_tuberia(
         {_td(_fmt(e_fin, 3))}
         {_td(_fmt(diam))}
         {_td(_fmt(esp))}
-        {_td(_fmt(area_tub), fill=_FILL_CALC)}
+        {_td(_fmt(area_tub, 2 if tipo == "FILTRO" else 3), fill=_FILL_CALC)}
         {_td(_esc(material))}
         {_td(tipo_red, fill=_FILL_CALC)}
       </tr>
     </table>
     """
 
-    # Areas / atraque / excavación (B14:G15).
+    # Areas / atraque / excavación (B14:G15). A1/A2 a 2 dec (floor canónico).
     atr = f"""
     <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:0 0 2px;">
       <tr>
@@ -291,8 +293,8 @@ def html_franja_tramo_tuberia(
         {_th("Anc. Excavación")}
       </tr>
       <tr>
-        {_td(_fmt(area_1), fill=_FILL_CALC)}
-        {_td(_fmt(area_2), fill=_FILL_CALC)}
+        {_td(_fmt(area_1, 2), fill=_FILL_CALC)}
+        {_td(_fmt(area_2, 2), fill=_FILL_CALC)}
         {_td(_esc(rel))}
         {_td(_fmt(h_relleno), fill=_FILL_CALC)}
         {_td(cama_val)}
@@ -401,7 +403,7 @@ def svg_seccion_tipica_pdf(seccion_tipica: Optional[dict], *, width: int = 320, 
     )
     parts.append(
         f'<text x="{cx}" y="{height - 6}" font-size="7" fill="#64748b" text-anchor="middle">'
-        f'{label_b} · A1={_fmt(st.get("area_1_m2"), 4)} · A2={_fmt(st.get("area_2_m2"), 4)}</text>'
+        f'{label_b} · A1={_fmt(st.get("area_1_m2"), 2)} · A2={_fmt(st.get("area_2_m2"), 2)}</text>'
     )
     parts.append("</svg>")
     return "".join(parts)
@@ -544,9 +546,11 @@ def captions_dimensiones_seccion(
         linea1 += f" · h_atr={h_rel:.3f} m"
         if rel:
             linea1 += f" ({rel})"
-    a1 = _num(st.get("area_1_m2"), 0.0)
-    a2 = _num(st.get("area_2_m2"), 0.0)
-    linea2 = f"A1={a1:.4f} m² · A2={a2:.4f} m²"
+    from topografia_planilla_tuberia import _floor_area_2dec
+
+    a1 = float(_floor_area_2dec(_num(st.get("area_1_m2"), 0.0)) or 0.0)
+    a2 = 0.0 if es_filtro else float(_floor_area_2dec(_num(st.get("area_2_m2"), 0.0)) or 0.0)
+    linea2 = f"A1={a1:.2f} m² · A2={a2:.2f} m²"
     return linea1, linea2
 
 

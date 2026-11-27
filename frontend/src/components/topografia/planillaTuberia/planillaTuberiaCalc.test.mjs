@@ -11,6 +11,8 @@ import {
   areaTuberiaM2,
   calcularPlanillaLocal,
   calcularSeccion,
+  floorArea2dec,
+  floorAreaTuboFiltro2dec,
   nombreTrituradoPorTipo,
   NOMBRE_TRI_ALCANTARILLA,
   NOMBRE_TRI_FILTRO,
@@ -20,6 +22,14 @@ const dir = dirname(fileURLToPath(import.meta.url))
 const formSrc = readFileSync(join(dir, 'PlanillaTuberiaForm.jsx'), 'utf8')
 
 describe('planillaTuberiaCalc — preview reactivo', () => {
+  it('floor A1/A2 a 2 dec (0.475→0.47) y tubo filtro min 0.01', () => {
+    assert.equal(floorArea2dec(0.475), 0.47)
+    assert.equal(floorArea2dec(0.4752), 0.47)
+    assert.equal(floorArea2dec(0.58), 0.58)
+    assert.equal(floorAreaTuboFiltro2dec(0.008), 0.01)
+    assert.equal(floorAreaTuboFiltro2dec(0.012), 0.01)
+  })
+
   it('sección ALC: Ø=0.9 esp=0.05 B=1.2 rel 1:3', () => {
     const sec = calcularSeccion({
       tipo: 'ALCANTARILLA',
@@ -34,6 +44,21 @@ describe('planillaTuberiaCalc — preview reactivo', () => {
     assert.ok(sec.area_1_m2 >= 0)
     assert.ok(sec.area_2_m2 >= 0)
     assert.equal(areaTuberiaM2(0.9, 0.05), sec.area_tuberia_m2)
+    assert.equal(sec.area_1_m2, floorArea2dec(sec.area_1_m2))
+    assert.equal(sec.area_2_m2, floorArea2dec(sec.area_2_m2))
+  })
+
+  it('sección FILTRO: A2=0 y área tubo floor≥0.01', () => {
+    const sec = calcularSeccion({
+      tipo: 'FILTRO',
+      diametro_m: 0.2,
+      espesor_m: 0.01,
+      ancho_excavacion_m: 0.8,
+      relacion_atraque: '1:4',
+    })
+    assert.equal(sec.area_2_m2, 0)
+    assert.ok(sec.area_tuberia_m2 >= 0.01)
+    assert.equal(sec.area_tuberia_m2, floorAreaTuboFiltro2dec(areaTuberiaM2(0.2, 0.01)))
   })
 
   it('perfil y netos reaccionan a filas de cartera', () => {

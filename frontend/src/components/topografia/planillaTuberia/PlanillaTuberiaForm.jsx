@@ -1639,8 +1639,8 @@ export default function PlanillaTuberiaForm({
       ) : (
         <div style={{ fontSize: 'var(--cc-xs)', color: ui.textMuted }}>
           H.Relleno={fmtNDash(planilla.altura_relleno_m, 4)} ·
-          A1={fmtNDash(planilla.area_1_m2, 4)} ·
-          A2={fmtNDash(planilla.area_2_m2, 4)}
+          A1={fmtNDash(planilla.area_1_m2, 2)} ·
+          A2={fmtNDash(planilla.area_2_m2, 2)}
         </div>
       )}
       {detalle?.coords_wgs84 && (

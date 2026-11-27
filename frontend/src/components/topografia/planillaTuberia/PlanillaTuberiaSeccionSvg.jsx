@@ -58,7 +58,7 @@ export default function PlanillaTuberiaSeccionSvg({ seccionTipica, ui }) {
           : ` · h_atr=${hRel.toFixed(3)} m (${st.relacion_atraque || ''})`}
       </div>
       <div style={{ fontSize: 11, color: surf.textMuted, textAlign: 'center' }}>
-        {`A1=${Number(st.area_1_m2 || 0).toFixed(4)} m² · A2=${Number(st.area_2_m2 || 0).toFixed(4)} m²`}
+        {`A1=${Number(st.area_1_m2 || 0).toFixed(2)} m² · A2=${Number(st.area_2_m2 || 0).toFixed(2)} m²`}
       </div>
     </div>
   )
