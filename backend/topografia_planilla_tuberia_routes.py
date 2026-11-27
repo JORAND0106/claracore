@@ -103,6 +103,38 @@ def _assert_editable(p: dict) -> None:
         raise HTTPException(409, "Planilla cerrada/validada: no editable.")
 
 
+def _firma_nivel_ya_registrada(row: dict, nivel: int) -> bool:
+    """True si el nivel ya tiene firmante (usuario_id) guardado."""
+    raw = (row or {}).get(f"nivel{nivel}_usuario_id")
+    if raw is None:
+        return False
+    return str(raw).strip() != ""
+
+
+def _aplicar_firma_nivel_en_update(
+    update: dict[str, Any],
+    row: dict,
+    nivel: int,
+    *,
+    uid: int,
+    now: str,
+    current_user,
+) -> bool:
+    """Escribe usuario/fecha del nivel. Si Desarrollador y ya hay firma, la conserva.
+
+    Returns True cuando se conservó la firma previa (no se sobrescribió).
+    """
+    key_uid = f"nivel{nivel}_usuario_id"
+    key_fecha = f"nivel{nivel}_fecha"
+    if _firma_nivel_ya_registrada(row, nivel) and _es_desarrollador(current_user):
+        update[key_uid] = row.get(key_uid)
+        update[key_fecha] = row.get(key_fecha)
+        return True
+    update[key_uid] = uid
+    update[key_fecha] = now
+    return False
+
+
 def _assert_version(p: dict, version: int) -> None:
     actual = int(p.get("version") or 1)
     if int(version) != actual:
@@ -3684,12 +3716,13 @@ def _aplicar_validacion_planilla_tuberia(
     now = _now()
     update: dict[str, Any] = {
         f"nivel{nivel}_estado": body.estado,
-        f"nivel{nivel}_usuario_id": uid,
-        f"nivel{nivel}_fecha": now,
         "nivel_validacion": nivel,
         "version": int(row.get("version") or 1) + 1,
         "updated_at": now,
     }
+    firma_conservada = _aplicar_firma_nivel_en_update(
+        update, row, nivel, uid=uid, now=now, current_user=current_user,
+    )
 
     # Adjuntos de imagen (archivo / Ctrl+V) asociados a esta validación (N1 o N2).
     adjuntos: list[dict[str, Any]] = []
@@ -3786,6 +3819,8 @@ def _aplicar_validacion_planilla_tuberia(
             "comentario": bool(body.comentario_data),
             "mensaje": (update.get("comentario_interventoria") if nivel == 2 else None),
             "auto_cierre": bool(nivel == 2 and body.estado == "Aprobado"),
+            "firma_conservada": bool(firma_conservada),
+            "firmante_usuario_id": update.get(f"nivel{nivel}_usuario_id"),
         },
     )
     return {
@@ -3978,26 +4013,42 @@ def reabrir(contrato_id: int, planilla_id: str, current_user=Depends(get_current
     if (p.get("estado") or "").lower() not in ("cerrado", "validado"):
         raise HTTPException(422, "La planilla no está cerrada.")
     now = _now()
-    supabase.table("topo_planillas_tuberia").update({
+    # Desarrollador: reabre para corregir valores sin borrar quién Elaboró / Aprobó.
+    # Revocar validación sigue siendo la vía explícita para limpiar firmas.
+    es_dev = _es_desarrollador(current_user)
+    patch_reabrir: dict[str, Any] = {
         "estado": "borrador",
         "nivel_validacion": 0,
         "validado_at": None,
         "validado_por": None,
-        "nivel1_estado": "No Revisado",
-        "nivel1_usuario_id": None,
-        "nivel1_fecha": None,
-        "nivel2_estado": "No Revisado",
-        "nivel2_usuario_id": None,
-        "nivel2_fecha": None,
-        "comentario_interventoria": None,
-        "comentario_interventoria_at": None,
         "reabierto_at": now,
         "reabierto_por": _uid(current_user),
         "version": int(p.get("version") or 1) + 1,
         "updated_at": now,
-    }).eq("id", planilla_id).execute()
+    }
+    if not es_dev:
+        patch_reabrir.update({
+            "nivel1_estado": "No Revisado",
+            "nivel1_usuario_id": None,
+            "nivel1_fecha": None,
+            "nivel2_estado": "No Revisado",
+            "nivel2_usuario_id": None,
+            "nivel2_fecha": None,
+            "comentario_interventoria": None,
+            "comentario_interventoria_at": None,
+        })
+    supabase.table("topo_planillas_tuberia").update(patch_reabrir).eq("id", planilla_id).execute()
     supabase.table("topo_planilla_tuberia_consolidado").delete().eq("planilla_id", planilla_id).execute()
-    _audit(contrato_id, planilla_id, "REABRIR", current_user, {"estado_previo": p.get("estado")})
+    _audit(
+        contrato_id,
+        planilla_id,
+        "REABRIR",
+        current_user,
+        {
+            "estado_previo": p.get("estado"),
+            "firmas_conservadas": bool(es_dev),
+        },
+    )
     return _detalle(contrato_id, planilla_id)
 
 
