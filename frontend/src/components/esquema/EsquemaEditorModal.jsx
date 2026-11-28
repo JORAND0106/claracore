@@ -228,6 +228,11 @@ import {
   measuresFromObjects,
   syncSceneBloquesToLibrary,
 } from './esquemaLibraryScale'
+import {
+  applyLibraryItemToSelectedNodes,
+  libraryInsertMode,
+  selectedNodesFromSelection,
+} from './esquemaLibraryInsert'
 import CcModalBrandHeader from '../CcModalBrandHeader'
 import {
   composeEsquemaExport,
@@ -742,15 +747,6 @@ export default function EsquemaEditorModal({
   const [insertHint, setInsertHint] = useState('')
   const [libNamePrompt, setLibNamePrompt] = useState(null)
   const [libNotice, setLibNotice] = useState('')
-  // Biblioteca / mensaje de entidad solo aplican al tipo Nodo.
-  useEffect(() => {
-    if (effectiveDibujoTipo === 'nodo') return undefined
-    setLibOpen(false)
-    setLibNotice('')
-    setInsertHint('')
-    return undefined
-  }, [effectiveDibujoTipo])
-
   // Cambiar de herramienta desactiva el modo «nodo desde el plano».
   useEffect(() => {
     if (!pickNodoFromMapRef.current) return undefined
@@ -1049,6 +1045,32 @@ export default function EsquemaEditorModal({
   }
 
   const selectOne = (id) => selectIds(id ? [id] : [])
+
+  /** Selección de nodos desde la tabla de coordenadas (N°). */
+  const selectNodesByNums = (nums, { additive = false } = {}) => {
+    const want = new Set((nums || []).map((n) => String(n)))
+    const nodes = (objectsRef.current || []).filter((o) => (
+      o?.type === 'nodo' && want.has(String(o.nodeNum))
+    ))
+    if (!nodes.length && !additive) {
+      selectIds([])
+      return
+    }
+    if (additive) {
+      const prev = new Set(selectedIdsRef.current || [])
+      for (const n of nodes) {
+        if (prev.has(n.id)) prev.delete(n.id)
+        else prev.add(n.id)
+      }
+      selectIds([...prev])
+      return
+    }
+    selectIds(nodes.map((n) => n.id))
+  }
+
+  const selectedNodeNums = (objectsRef.current || [])
+    .filter((o) => o?.type === 'nodo' && selectedIds.includes(o.id) && o.nodeNum != null)
+    .map((o) => String(o.nodeNum))
 
   const selectedObj = selectedIds.length === 1 && selectedId
     ? (objectsRef.current.find((o) => o.id === selectedId) || null)
@@ -4068,13 +4090,8 @@ export default function EsquemaEditorModal({
     if (!opts.skipTipoActions && tipo === 'nodo' && liveNodes.length) {
       refreshLibrary()
       setLibOpen(true)
-      setLibNotice('Seleccione una entidad para insertarla sobre el nodo (punto medio). Si no elige ninguna, se guarda el marcador legible.')
-      setInsertHint('Elija una entidad de la biblioteca o guarde solo con el marcador del nodo.')
-    }
-    if (!opts.skipTipoActions && tipo !== 'nodo') {
-      setLibOpen(false)
-      setLibNotice('')
-      setInsertHint('')
+      setLibNotice('Seleccione uno o más nodos y luego un bloque; sin selección, el bloque se inserta con un clic libre.')
+      setInsertHint('Biblioteca: nodos seleccionados o clic libre en el plano.')
     }
     if (!opts.skipTipoActions && accion.abrirUnirPorNumero && liveNodes.length) {
       setLibOpen(false)
@@ -4509,6 +4526,7 @@ export default function EsquemaEditorModal({
       const pending = pendingInsertRef.current
       const item = pending?.item || pending
       const onPlane = !!(pending?.onPlane || huellaMode || mapActiveRef.current)
+      p = snapWorldPoint(p)
       const placed = onPlane
         ? instantiateLibraryItemAtRealScale(item, p)
         : instantiateLibraryItem(item, p)
@@ -6064,49 +6082,39 @@ export default function EsquemaEditorModal({
   const beginInsertLibraryItem = (item) => {
     if (!item?.objects?.length && !item?.children?.length) return
     const onPlane = !!(huellaMode || mapActiveRef.current)
-    // Tipo Nodo: insertar centrada en cada nodo (punto medio, escala 1:1).
-    if (dibujoTipoRef.current === 'nodo') {
-      const nodes = objectsRef.current.filter((o) => o?.type === 'nodo' && Number.isFinite(o.x) && Number.isFinite(o.y))
-      if (nodes.length) {
-        pushHistory()
-        const withoutPrev = objectsRef.current.filter((o) => !(o?.type === 'bloque' && o?.fromLibraryOnNode))
-        const placed = []
-        for (const n of nodes) {
-          const inst = (onPlane
-            ? instantiateLibraryItemAtRealScale(item, { x: n.x, y: n.y }, { fromLibraryOnNode: true })
-            : instantiateLibraryItem(item, { x: n.x, y: n.y }).map((b) => ({
-              ...b,
-              libraryId: item.id,
-              libraryNombre: item.nombre,
-              fromLibraryOnNode: true,
-              scaleLocked: true,
-            }))
-          ).map((b) => ({
-            ...b,
-            este: Number.isFinite(Number(n.este)) ? Number(n.este) : b.este,
-            norte: Number.isFinite(Number(n.norte)) ? Number(n.norte) : b.norte,
-            fromCoordTable: true,
-          }))
-          placed.push(...inst)
-        }
-        objectsRef.current = [...withoutPrev, ...placed]
-        pendingInsertRef.current = null
-        setInsertHint('')
-        setLibNotice('')
-        setLibOpen(false)
-        selectIds(placed.map((o) => o.id))
-        setDirty(true)
-        setTool('seleccion')
-        if (onPlane) syncCanvasToMapRef.current()
-        redraw()
-        return
-      }
+    // Solo nodos seleccionados reciben el bloque; sin selección → modo libre (clic).
+    const selectedNodes = selectedNodesFromSelection(
+      objectsRef.current,
+      selectedIdsRef.current,
+    )
+    if (libraryInsertMode(objectsRef.current, selectedIdsRef.current) === 'nodes') {
+      pushHistory()
+      const { objects: next, placed } = applyLibraryItemToSelectedNodes(
+        objectsRef.current,
+        selectedNodes,
+        item,
+        { onPlane },
+      )
+      objectsRef.current = next
+      pendingInsertRef.current = null
+      setInsertHint('')
+      setLibNotice(placed.length
+        ? `Bloque «${item.nombre}» en ${selectedNodes.length} nodo(s) seleccionado(s)`
+        : '')
+      setLibOpen(false)
+      selectIds(placed.map((o) => o.id))
+      setDirty(true)
+      setTool('seleccion')
+      if (onPlane) syncCanvasToMapRef.current()
+      redraw()
+      return
     }
-    pendingInsertRef.current = { item, onPlane }
+    pendingInsertRef.current = { item, onPlane, free: true }
     const label = formatLibraryMeasuresLabel(item)
     setInsertHint(onPlane
       ? `Clic para insertar «${item.nombre}» a escala 1:1${label ? ` (${label})` : ''}`
       : `Clic para insertar «${item.nombre}»`)
+    setLibNotice('')
     setLibOpen(false)
   }
 
@@ -8668,6 +8676,8 @@ export default function EsquemaEditorModal({
                       embedded
                       pickFromMapActive={pickNodoFromMap}
                       onTogglePickFromMap={togglePickNodoFromMap}
+                      selectedNodeNums={selectedNodeNums}
+                      onToggleNodeNum={(num, opts) => selectNodesByNums([num], opts)}
                       onClose={() => {
                         setPickNodoFromMap(false)
                         setCoordPanelOpen(false)
@@ -8803,7 +8813,7 @@ export default function EsquemaEditorModal({
                       onAppendNum={tryAppendJoinNum}
                     />
                   ) : null}
-                  {libOpen && huellaTipoRef.current === 'nodo' ? (
+                  {libOpen ? (
                     <BibliotecaPanel
                       t={t}
                       ui={ui}
@@ -9212,6 +9222,8 @@ export default function EsquemaEditorModal({
                     embedded
                     pickFromMapActive={pickNodoFromMap}
                     onTogglePickFromMap={togglePickNodoFromMap}
+                    selectedNodeNums={selectedNodeNums}
+                    onToggleNodeNum={(num, opts) => selectNodesByNums([num], opts)}
                     onClose={() => {
                       setPickNodoFromMap(false)
                       setCoordPanelOpen(false)
@@ -10010,6 +10022,8 @@ export default function EsquemaEditorModal({
                     embedded
                     pickFromMapActive={pickNodoFromMap}
                     onTogglePickFromMap={togglePickNodoFromMap}
+                    selectedNodeNums={selectedNodeNums}
+                    onToggleNodeNum={(num, opts) => selectNodesByNums([num], opts)}
                     onClose={() => {
                       setPickNodoFromMap(false)
                       setCoordPanelOpen(false)
@@ -12076,6 +12090,8 @@ function CoordsPanel({
   embedded = false,
   pickFromMapActive = false,
   onTogglePickFromMap = null,
+  selectedNodeNums = null,
+  onToggleNodeNum = null,
 }) {
   const list = rows?.length ? renumberCoordRows(rows) : [{ num: '1', norte: '', este: '', cota: '', desc: '' }]
   const sheet = coordSheetStyles(t)
@@ -12205,10 +12221,48 @@ function CoordsPanel({
             </tr>
           </thead>
           <tbody>
-            {list.map((r, i) => (
-              <tr key={`c-${i}`}>
+            {list.map((r, i) => {
+              const numKey = String(r.num != null ? r.num : (i + 1))
+              const rowSelected = Array.isArray(selectedNodeNums)
+                && selectedNodeNums.map(String).includes(numKey)
+              const rowBg = rowSelected
+                ? (t.primarySoft || 'rgba(13,148,136,0.18)')
+                : undefined
+              return (
+              <tr
+                key={`c-${i}`}
+                data-testid={`esquema-coord-row-${numKey}`}
+                data-selected={rowSelected ? '1' : '0'}
+                style={rowBg ? { background: rowBg } : undefined}
+              >
                 <td style={sheet.td}>
-                  <div style={sheet.ro}>{i + 1}</div>
+                  <button
+                    type="button"
+                    data-testid={`esquema-coord-select-${numKey}`}
+                    title={rowSelected
+                      ? 'Quitar de la selección (Shift: varias)'
+                      : 'Seleccionar nodo (Shift: agregar)'}
+                    aria-label={`Seleccionar nodo ${numKey}`}
+                    aria-pressed={rowSelected}
+                    onClick={(e) => {
+                      if (typeof onToggleNodeNum !== 'function') return
+                      onToggleNodeNum(numKey, {
+                        additive: !!(e.shiftKey || e.metaKey || e.ctrlKey),
+                      })
+                    }}
+                    style={{
+                      ...sheet.ro,
+                      width: '100%',
+                      border: rowSelected ? `1px solid ${t.primary || '#0d9488'}` : '1px solid transparent',
+                      borderRadius: 4,
+                      cursor: typeof onToggleNodeNum === 'function' ? 'pointer' : 'default',
+                      background: rowSelected ? (t.primary || '#0d9488') : 'transparent',
+                      color: rowSelected ? '#fff' : (t.text || '#0f172a'),
+                      fontWeight: 800,
+                    }}
+                  >
+                    {i + 1}
+                  </button>
                 </td>
                 {['norte', 'este', 'cota', 'desc'].map((key) => (
                   <td key={key} style={sheet.td}>
@@ -12231,7 +12285,8 @@ function CoordsPanel({
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

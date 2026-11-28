@@ -59,17 +59,17 @@ describe('caso 33 · dibujo por coordenadas transversal', () => {
     )
   })
 
-  it('caso c · agregar nodo desde mapa y biblioteca 1:1 en tipo nodo (todos los módulos)', () => {
+  it('caso c · agregar nodo desde mapa y biblioteca 1:1 (todos los módulos)', () => {
     assert.match(modal, /togglePickNodoFromMap|pickNodoFromMap/)
     assert.match(modal, /addNodoDesdePlanoAt/)
     assert.match(modal, /esquema-coords-pick-from-map/)
-    // Insertar biblioteca en nodos ya no exige huellaMode.
-    assert.match(modal, /if \(dibujoTipoRef\.current === 'nodo'\)/)
+    // Biblioteca independiente (C-2D-14): nodos seleccionados o inserción libre.
+    assert.match(modal, /applyLibraryItemToSelectedNodes|libraryInsertMode/)
+    assert.match(modal, /instantiateLibraryItemAtRealScale/)
     assert.doesNotMatch(
       modal,
       /if \(huellaMode && huellaTipoRef\.current === 'nodo'\)/,
     )
-    assert.match(modal, /instantiateLibraryItemAtRealScale/)
   })
 
   it('caso d · borrador guarda tabla + tipo; tabla vacía si no hay initialCoordRows', () => {
