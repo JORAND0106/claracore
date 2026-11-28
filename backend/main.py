@@ -25941,7 +25941,12 @@ def analisis_registros_obra(
         # ClaraGIS: traer dibujo del reporte (botón Dibujar) junto al mapa de calor
         # para no depender de /huellas del contrato entero (~40s).
         if _formato_mapa:
+            # dibujo_escena: fuente canónica de forma/giro para ClaraGIS (C-OUT-25).
             _sel_rep_candidates = (
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng, dibujo_geojson, perimetro_geojson, dibujo_escena",
+                "id, capitulo, estado, numero_reporte, descripcion_actividad, "
+                "coord_lat, coord_lng, dibujo_geojson, dibujo_escena",
                 "id, capitulo, estado, numero_reporte, descripcion_actividad, "
                 "coord_lat, coord_lng, dibujo_geojson, perimetro_geojson",
                 "id, capitulo, estado, numero_reporte, descripcion_actividad, "

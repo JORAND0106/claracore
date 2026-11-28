@@ -3,7 +3,10 @@
  * Solo lectura: estilo distinto al dibujo en curso; clic → propiedades.
  * Preferimos geometría detallada desde dibujo_escena (forma real de entidades).
  */
-import { esquemaEscenaToDetalleGeojson } from '../../modules/sicoe-obra/sicoeDibujoEscenaGeojson.js'
+import {
+  esquemaEscenaToDetalleGeojson,
+  geojsonCanonicoDesdeReporte,
+} from '../../modules/sicoe-obra/sicoeDibujoEscenaGeojson.js'
 import { colorDibujoPorItems, SICOE_ITEM_COLOR_NEUTRO } from '../../modules/sicoe-obra/sicoeItemColores.js'
 
 export const ESQUEMA_DIBUJO_REFS_SOURCE = 'esquema-dibujo-refs'
@@ -30,8 +33,9 @@ function featuresFromGeojson(dg) {
 }
 
 /**
- * GeoJSON de visualización para una referencia: escena detallada si existe,
- * si no el dibujo_geojson persistido.
+ * GeoJSON de visualización para una referencia.
+ * Preferimos detalle de escena (forma real + giro); si no, canónico (escena→geojson);
+ * si no, dibujo_geojson persistido.
  */
 export function geojsonParaReferencia(ref) {
   if (!ref) return { type: 'FeatureCollection', features: [] }
@@ -45,9 +49,15 @@ export function geojsonParaReferencia(ref) {
       return detailed
     }
   }
+  const canon = geojsonCanonicoDesdeReporte({
+    id: ref.reporte_id,
+    reporte_id: ref.reporte_id,
+    dibujo_escena: ref.dibujo_escena,
+    dibujo_geojson: ref.dibujo_geojson,
+  })
   return {
     type: 'FeatureCollection',
-    features: featuresFromGeojson(ref.dibujo_geojson),
+    features: Array.isArray(canon.features) ? canon.features : featuresFromGeojson(ref.dibujo_geojson),
   }
 }
 
