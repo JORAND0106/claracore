@@ -1,0 +1,79 @@
+# Rescate de datos del esquema eliminado del reporte SicoeObra #54.
+# Solo inventario + restauración de graficos_historial / asignación.
+# No modifica funcionalidad ni restaura la BD completa.
+name: Rescate esquema reporte 54
+
+on:
+  push:
+    branches: [cursor/rescate-esquema-reporte-54-4315]
+    paths:
+      - "backend/scripts/rescate_esquema_reporte_54.py"
+      - ".github/workflows/rescate-esquema-reporte-54.yml"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo inventario (1) o restaurar (0)"
+        required: false
+        default: "0"
+      force_reg_ids:
+        description: "IDs de so_registros a forzar (coma-separados)"
+        required: false
+        default: ""
+      assign_all:
+        description: "Si no hay inferidos, asignar a todos no sellados (1/0)"
+        required: false
+        default: "0"
+
+jobs:
+  rescate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          python -m pip install -q azure-identity azure-mgmt-web azure-storage-blob
+          python -m pip install -q -r backend/requirements.txt
+      - name: Inventario + restauración reporte #54
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          RESCATE_OUT_DIR: ${{ runner.temp }}/rescate_esquema_54
+          RESCATE_DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          # Default: los 7 registros del timeline del #54 (rescate incompleto previo).
+          RESCATE_FORCE_REG_IDS: ${{ github.event.inputs.force_reg_ids || '61422,61429,61433,61434,61435,61436,61437' }}
+          RESCATE_ASSIGN_ALL: ${{ github.event.inputs.assign_all || '0' }}
+        working-directory: ./backend
+        run: |
+          set -euo pipefail
+          if [ -z "${AZURE_CREDENTIALS}" ]; then
+            echo "AZURE_CREDENTIALS ausente" >&2
+            exit 1
+          fi
+          mkdir -p "${RESCATE_OUT_DIR}"
+          set +e
+          PYTHONPATH=. python3 scripts/rescate_esquema_reporte_54.py > "${RESCATE_OUT_DIR}/stdout.json" 2> "${RESCATE_OUT_DIR}/stderr.txt"
+          rc=$?
+          set -e
+          echo "script_exit=$rc"
+          cat "${RESCATE_OUT_DIR}/stderr.txt" || true
+          echo "==== STDOUT ===="
+          cat "${RESCATE_OUT_DIR}/stdout.json" || true
+          echo "==== RESUMEN ===="
+          if [ -f "${RESCATE_OUT_DIR}/rescate_esquema_54_resumen.json" ]; then
+            python3 -c "import json; d=json.load(open('${RESCATE_OUT_DIR}/rescate_esquema_54_resumen.json')); print(json.dumps(d, indent=2, default=str)[:16000])"
+          else
+            echo "sin resumen (script falló antes de escribir)"
+            ls -la "${RESCATE_OUT_DIR}" || true
+            exit "$rc"
+          fi
+          exit "$rc"
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rescate-esquema-54-${{ github.run_id }}
+          path: ${{ runner.temp }}/rescate_esquema_54/
+          if-no-files-found: warn
+          retention-days: 30
