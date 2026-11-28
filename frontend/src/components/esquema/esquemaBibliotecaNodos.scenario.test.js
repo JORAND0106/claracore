@@ -43,8 +43,9 @@ describe('escenario · biblioteca independiente y bloques por nodo (C-2D-14)', (
       /libOpen && huellaTipoRef\.current === 'nodo'/,
     )
     assert.match(modal, /\{libOpen \? \(\s*<BibliotecaPanel/)
-    // Free insert snapea con OSNAP.
-    assert.match(modal, /pendingInsertRef\.current[\s\S]{0,200}snapWorldPoint/)
+    // Free insert snapea con OSNAP y pide el punto de inserción.
+    assert.match(modal, /pendingInsertRef\.current[\s\S]{0,400}snapWorldPoint/)
+    assert.match(modal, /Toque el punto de inserción/)
     assert.match(contrato, /C-2D-14/)
   })
 
