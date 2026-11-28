@@ -235,6 +235,41 @@ export function simularFlujoEsquemasE2E({
     if (nums.includes(quitado.numero_registro)) {
       throw new Error('El registro desasignado sigue en la lista')
     }
+
+    // 6) Desasignar de TODOS → Sin asignar (esquema NO se borra)
+    const entradaFinal = entradaDesdeFilaLista(filaFinal, reporteId)
+    const antesTodos = snapshotRegs()
+    const { patches: patchesSinTodos } = planificarAsignacionEsquema({
+      registros: regs,
+      entrada: entradaFinal,
+      idsDeseados: [],
+      isSellado,
+    })
+    for (const p of patchesSinTodos) {
+      if (!patchSoloCamposGrafico(p.body)) throw new Error('Desasignar todos tocó cantidades')
+      regs = regs.map((r) => (String(r.id) === String(p.registro.id)
+        ? { ...r, ...p.body }
+        : r))
+    }
+    sinAsignar = [{
+      esquema_id: entradaFinal.esquema_id,
+      numero: entradaFinal.numero,
+      nombre: entradaFinal.nombre,
+      url: entradaFinal.url,
+      scene: entradaFinal.scene,
+      entrada: { ...entradaFinal },
+      updatedAt: Date.now(),
+    }]
+    log.push({ accion: 'desasignar_todos_sin_asignar', antes: antesTodos, despues: snapshotRegs() })
+    lista = mergeEsquemasLista(listarEsquemasDelReporte(regs, isSellado), sinAsignar)
+    const filaHuerfana = lista.find((x) => x.esquema_id === 'esq-e2e-174')
+    if (!filaHuerfana?.sinAsignar) {
+      throw new Error('Tras quitar de todos debe quedar Sin asignar (no borrarse)')
+    }
+    if (!(filaHuerfana.scene || filaHuerfana.url)) {
+      throw new Error('Sin asignar perdió dibujo/escena')
+    }
+
     // Cantidades intactas
     for (const r of regs) {
       const orig = (registrosIniciales || []).find((o) => String(o.id) === String(r.id))
@@ -249,7 +284,8 @@ export function simularFlujoEsquemasE2E({
       patchesAsignar,
       patchesEditar,
       patchesReasignar,
-      sceneReabierta: filaFinal?.scene || null,
+      patchesSinTodos,
+      sceneReabierta: filaHuerfana?.scene || filaFinal?.scene || null,
       log,
     }
   } catch (e) {
