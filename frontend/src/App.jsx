@@ -309,6 +309,10 @@ import {
   sicoeSubcontratistaIdDeRegistro,
 } from './modules/sicoe-obra/sicoeRegistroSubcontratista'
 import { sicoeFiltrarRegistrosParaSub } from './modules/sicoe-obra/sicoeSubcontratistaRegistros'
+import {
+  sicoePrepararRegistrosWizardDesdePlantilla,
+  sicoeRegistroDesdeItemPlantilla,
+} from './modules/sicoe-obra/sicoePlantillaLineasWizard'
 import { permisosProgramacionObra } from './progObraPermisos'
 import { permisosTopografia, usuarioPuedeEditarRegistrosSicoe } from './utils/permisosContrato'
 import { esVistaSubcontratista, usuarioAisladoPorEmpresaSub } from './utils/empresaUsuario'
@@ -16865,6 +16869,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [nuevaPlantillaItems, setNuevaPlantillaItems] = useState([{nombre:'', descripcion:''}])
   const [plantillaAEliminar, setPlantillaAEliminar] = useState(null)
   const [eliminandoPlantilla, setEliminandoPlantilla] = useState(false)
+  /** Aviso institucional al guardar (plantilla incompleta / sin registros). */
+  const [wizardRegistrosAviso, setWizardRegistrosAviso] = useState(null)
 
   // Datos TAB 3 - Registros
   const [registros, setRegistros] = useState([])
@@ -17584,18 +17590,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const aplicarPlantilla = (plantilla) => {
     setPlantillaSel(plantilla)
     if (plantilla?.items?.length) {
-      setRegistros(plantilla.items.map(item => ({
-        nombre: item.nombre,
-        descripcion: '',
-        longitud: '', ancho: '', espesor: '', cantidad: '',
-        cantidad_total: null,
-        unidad: '',
-        observacion: '',
-        foto_url: null, foto_numero: null, foto_descripcion: '', fotos_historial: [],
-        grafico_url: null, grafico_numero: null, grafico_descripcion: '',
-        _fotoOk: false, _grafOk: false,
-        ...stampLocEnRegistro(),
-      })))
+      setRegistros(plantilla.items.map((item) =>
+        sicoeRegistroDesdeItemPlantilla(item, stampLocEnRegistro()),
+      ))
     }
   }
 
@@ -17642,12 +17639,36 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       alert('Complete la localización del reporte antes de enviar.')
       return
     }
-    if (registros.length === 0) { alert('Debe tener al menos un registro'); setTabActivo(3); return }
+    if (registros.length === 0) {
+      setWizardRegistrosAviso({
+        mensaje: 'Debe diligenciar al menos un registro para enviar el reporte.',
+      })
+      setTabActivo(3)
+      return
+    }
+    const prepPlantilla = sicoePrepararRegistrosWizardDesdePlantilla(registros, {
+      unidadEsKg: sicoeUnidadEsKg,
+      validarDiametro: sicoeValidarDiametroOError,
+    })
+    if (!prepPlantilla.ok) {
+      setWizardRegistrosAviso({
+        mensaje: prepPlantilla.mensaje,
+        indice: prepPlantilla.indice,
+      })
+      setTabActivo(3)
+      if (prepPlantilla.codigo === 'incompleto' && prepPlantilla.indice != null) {
+        setModalRegistro(prepPlantilla.indice)
+      }
+      return
+    }
+    const registrosASubir = prepPlantilla.registros
     if (tipoLocalizacion === 'multiple') {
-      for (let i = 0; i < registros.length; i++) {
-        const { ok } = validarLocalizacion(registros[i])
+      for (let i = 0; i < registrosASubir.length; i++) {
+        const { ok } = validarLocalizacion(registrosASubir[i])
         if (!ok) {
-          alert(`El registro #${i + 1} no tiene localización asignada. Revise los lotes en el paso Registros.`)
+          setWizardRegistrosAviso({
+            mensaje: `El registro «${registrosASubir[i]?.nombre || `#${i + 1}`}» no tiene localización asignada. Revise los lotes en el paso Registros.`,
+          })
           setTabActivo(3)
           return
         }
@@ -17693,8 +17714,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           ...locRep,
         }
         const reporteLocal = await crearReporteLocal(contrato_id, { id: localId, ...reporteData })
-        for (let i = 0; i < registros.length; i++) {
-          const reg = registros[i]
+        for (let i = 0; i < registrosASubir.length; i++) {
+          const reg = registrosASubir[i]
           await crearRegistroLocal(contrato_id, localId, {
             nombre: reg.nombre, descripcion: reg.observacion,
             longitud: sicoeNumCampoOmitNull(reg.longitud),
@@ -17710,7 +17731,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           type: 'create_reporte',
           method: 'POST',
           endpoint: `/sicoe-obra/${contrato_id}/reportes-offline`,
-          body: { ...reporteData, registros: registros.map(r => ({
+          body: { ...reporteData, registros: registrosASubir.map(r => ({
             nombre: r.nombre, descripcion: r.observacion,
             longitud: sicoeNumCampoOmitNull(r.longitud),
             ancho: sicoeNumCampoOmitNull(r.ancho),
@@ -17848,8 +17869,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         ...(esMult ? localizacionToApiFields(reg) : localizacionToApiFields(locReporteActual())),
       })
 
-      if (modoEdicion && registros.some((r) => r.id)) {
-        for (const reg of registros) {
+      if (modoEdicion && registrosASubir.some((r) => r.id)) {
+        for (const reg of registrosASubir) {
           const linePayload = lineaRegistroWizard(reg)
           if (reg.id) {
             const rPut = await fetch(
@@ -17885,7 +17906,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       } else {
       // Un solo ida y vuelta: sustituye DELETE + 2N peticiones (evita "Failed to fetch" en 4G)
       const payloadReg = {
-        registros: registros.map((reg) => lineaRegistroWizard(reg))
+        registros: registrosASubir.map((reg) => lineaRegistroWizard(reg))
       }
       // Reintento: en móvil 4G el fetch largo a veces corta; el servidor puede haber quedado ok (idempotente: borra e inserta de nuevo)
       let rReg
@@ -18532,6 +18553,23 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           }}
         >
           <p style={{ margin: 0 }}>{wizardTopoAviso.mensaje}</p>
+        </CcConfirmModal>
+      )}
+
+      {wizardRegistrosAviso && (
+        <CcConfirmModal
+          theme={t}
+          zIndex={11050}
+          tipo="warn"
+          titulo="Registros del reporte"
+          confirmar="Entendido"
+          soloConfirmar
+          onCancel={() => setWizardRegistrosAviso(null)}
+          onConfirm={() => setWizardRegistrosAviso(null)}
+        >
+          <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.45 }}>
+            {wizardRegistrosAviso.mensaje}
+          </p>
         </CcConfirmModal>
       )}
 
