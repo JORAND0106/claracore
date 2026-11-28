@@ -142,17 +142,17 @@ def find_reporte(sb) -> Optional[dict]:
 
 
 def fetch_registros(sb, reporte_id: int) -> List[dict]:
-    # so_registros: creado_en (no updated_at). Probar columnas y degradar.
+    # so_registros en prod no tiene updated_at ni creado_en tipicos de reportes.
     col_sets = [
         (
             "id,reporte_id,contrato_id,numero_registro,item_numero,item_descripcion,"
             "cantidad_total,cantidad,unidad,grafico_url,grafico_numero,grafico_descripcion,"
-            "graficos_historial,bloqueado,nivel1_estado,creado_en"
+            "graficos_historial,bloqueado,nivel1_estado,created_at"
         ),
         (
-            "id,reporte_id,contrato_id,numero_registro,cantidad_total,"
+            "id,reporte_id,contrato_id,numero_registro,cantidad_total,cantidad,"
             "grafico_url,grafico_numero,grafico_descripcion,graficos_historial,"
-            "bloqueado,creado_en"
+            "bloqueado,nivel1_estado"
         ),
         (
             "id,reporte_id,contrato_id,numero_registro,cantidad_total,"
@@ -754,7 +754,7 @@ def main() -> int:
         if _contar_calcs(g2) or scene.get("objects"):
             scene_cands.append(g2)
 
-    candidatos = vivos + (logs.get("candidatos_esquema") or []) + scene_cands
+    candidatos_all = vivos + (logs.get("candidatos_esquema") or []) + scene_cands
 
     # Env force IDs
     force_ids = []
@@ -762,36 +762,43 @@ def main() -> int:
     if raw_force:
         force_ids = [x.strip() for x in raw_force.split(",") if x.strip()]
 
+    # Inferir registros ANTES de deduplicar (misma versión en N registros
+    # colapsaba y perdía ids).
+    def _mismo_esquema(a: dict, b: dict) -> bool:
+        if a.get("esquema_id") and b.get("esquema_id") and str(a["esquema_id"]) == str(b["esquema_id"]):
+            return True
+        if a.get("numero") is not None and b.get("numero") is not None and str(a["numero"]) == str(b["numero"]):
+            return True
+        if a.get("_rescateFuente") == "blob_scene" and a.get("_blob") and a.get("_blob") == b.get("_blob"):
+            return True
+        return False
+
     uniq = {}
-    for c in candidatos:
-        key = f"{c.get('esquema_id')}|{c.get('url')}|{_contar_calcs(c)}|{c.get('creado_en')}|{c.get('_rescateFuente')}|{c.get('_blob', '')}"
+    for c in candidatos_all:
+        # Incluir registro en la clave para no perder asignaciones
+        key = (
+            f"{c.get('esquema_id')}|{c.get('url')}|{_contar_calcs(c)}|"
+            f"{c.get('creado_en')}|{c.get('_rescateFuente')}|{c.get('_blob', '')}|"
+            f"{c.get('_registroId')}"
+        )
         uniq[key] = c
     candidatos = list(uniq.values())
     invent["n_candidatos_unicos"] = len(candidatos)
+    invent["n_candidatos_brutos"] = len(candidatos_all)
 
     mejor = elegir_mejor(candidatos)
     invent["mejor_candidato"] = None
     if mejor:
-        inferred = sorted({
-            c.get("_registroId") for c in candidatos
-            if c.get("_registroId") is not None and (
-                (mejor.get("esquema_id") and str(c.get("esquema_id")) == str(mejor.get("esquema_id")))
-                or (mejor.get("numero") is not None and c.get("numero") is not None
-                    and str(c.get("numero")) == str(mejor.get("numero")))
-                or (mejor.get("_rescateFuente") == "blob_scene" and c.get("_blob") == mejor.get("_blob"))
-            )
-        }, key=lambda x: str(x))
+        inferred_ids = sorted({
+            str(c.get("_registroId")) for c in candidatos_all
+            if c.get("_registroId") is not None and _mismo_esquema(mejor, c)
+        })
         # Si el mejor no tiene URL pero hay hermano con misma esquema_id/numero que sí
         if not mejor.get("url"):
-            for c in candidatos:
+            for c in candidatos_all:
                 if not c.get("url"):
                     continue
-                same = (
-                    (mejor.get("esquema_id") and str(c.get("esquema_id")) == str(mejor.get("esquema_id")))
-                    or (mejor.get("numero") is not None and c.get("numero") is not None
-                        and str(c.get("numero")) == str(mejor.get("numero")))
-                )
-                if same:
+                if _mismo_esquema(mejor, c):
                     mejor = {**mejor, "url": c.get("url"), "numero": mejor.get("numero") or c.get("numero")}
                     break
         invent["mejor_candidato"] = {
@@ -803,7 +810,7 @@ def main() -> int:
             "fuente": mejor.get("_rescateFuente"),
             "creado_en": mejor.get("creado_en") or mejor.get("_log_at"),
             "tiene_scene": bool(mejor.get("scene") or mejor.get("esquema_scene")),
-            "registros_inferidos": inferred,
+            "registros_inferidos": inferred_ids,
             "log_id": mejor.get("_log_id"),
             "blob": mejor.get("_blob"),
         }

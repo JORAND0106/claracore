@@ -41,7 +41,8 @@ jobs:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           RESCATE_OUT_DIR: ${{ runner.temp }}/rescate_esquema_54
           RESCATE_DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
-          RESCATE_FORCE_REG_IDS: ${{ github.event.inputs.force_reg_ids || '' }}
+          # Default: los 7 registros del timeline del #54 (rescate incompleto previo).
+          RESCATE_FORCE_REG_IDS: ${{ github.event.inputs.force_reg_ids || '61422,61429,61433,61434,61435,61436,61437' }}
           RESCATE_ASSIGN_ALL: ${{ github.event.inputs.assign_all || '0' }}
         working-directory: ./backend
         run: |
