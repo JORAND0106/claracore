@@ -28687,6 +28687,46 @@ def listar_plantillas_huerfanas(contrato_id: int, current_user=Depends(get_curre
     return resumir_plantillas_sin_creador(supabase_execute(_q) or [])
 
 
+@app.get("/sicoe-obra/{contrato_id}/registros-vacios-plantilla")
+def listar_registros_vacios_plantilla(contrato_id: int, current_user=Depends(get_current_user)):
+    """
+    Diagnóstico: registros vacíos típicos de líneas de plantilla no diligenciadas.
+    No elimina ni modifica.
+    """
+    from sicoe_registros_vacios_plantilla import resumir_registros_vacios_plantilla
+
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo desarrollador")
+    _require_contract_access(current_user, contrato_id)
+
+    cols = (
+        "id, reporte_id, numero_registro, nombre, longitud, ancho, espesor, "
+        "cantidad, cantidad_total, observacion, foto_url, fotos_historial"
+    )
+
+    def _fetch():
+        out = []
+        off = 0
+        while True:
+            batch = (
+                supabase.table("so_registros")
+                .select(cols)
+                .eq("contrato_id", contrato_id)
+                .order("id")
+                .range(off, off + 999)
+                .execute()
+                .data
+                or []
+            )
+            out.extend(batch)
+            if len(batch) < 1000:
+                break
+            off += 1000
+        return out
+
+    return resumir_registros_vacios_plantilla(supabase_execute(_fetch) or [])
+
+
 class PlantillaItem(BaseModel):
     nombre: str
     descripcion: Optional[str] = None
