@@ -11,20 +11,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sicoe_cantidad_redondeo import redondear_cantidad_total_dinamico, redondear_dimension
 
-# Diámetro canónico (pulgadas) → peso kg/m (2 decimales), NTC 2289.
+# Diámetro canónico (pulgadas) → peso kg/m (3 decimales), NTC 2289 / ASTM A615.
+# Dato de entrada: conserva 3 dp. La Cant. Total calculada sigue la regla única.
 SICOE_VARILLA_PESOS_KG_M: Dict[str, float] = {
     "1/4": 0.25,
     "3/8": 0.56,
-    "1/2": 0.99,
-    "5/8": 1.55,
-    "3/4": 2.24,
-    "7/8": 3.04,
-    "1": 3.97,
+    "1/2": 0.994,
+    "5/8": 1.552,
+    "3/4": 2.235,
+    "7/8": 3.042,
+    "1": 3.973,
     "1 1/8": 5.06,
-    "1 1/4": 6.40,
-    "1 3/8": 7.91,
-    "1 3/4": 11.38,
-    "2 1/4": 20.24,
+    "1 1/4": 6.404,
+    "1 3/8": 7.907,
+    "1 3/4": 11.387,
+    "2 1/4": 20.239,
 }
 
 SICOE_VARILLA_DIAMETROS_ORDEN: List[str] = [
@@ -200,9 +201,8 @@ def sicoe_validar_y_preparar_medicion_varilla(
                 f"Diámetros aceptados (pulgadas): {sicoe_diametros_validos_msg()}."
             )
         peso_tabla = sicoe_peso_kg_m_por_diametro(canon)
-        # Cuadro de aceros (despiece): conserva peso con precisión de cálculo (p. ej. #4=0,994)
-        # para que Cant Total coincida con el peso de la posición. La tabla NTC de plataforma
-        # (0,99) no se modifica.
+        # Cuadro de aceros (despiece): puede traer peso con precisión de cálculo;
+        # la tabla NTC de plataforma ya va a 3 dp.
         cuadro_id = data.get("cuadro_aceros_id")
         if cuadro_id is None:
             cuadro_id = prev.get("cuadro_aceros_id")

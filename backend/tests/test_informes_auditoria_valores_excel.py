@@ -158,7 +158,9 @@ def test_plataforma_pdf_excel_misma_secuencia_y_valores():
             ("cant_saldo", "cant_saldo"),
         ):
             pdf_txt = inf._fn_cant_informe(it[ck])
-            expected = f"{float(it[ck]):,.2f}"
+            from sicoe_cantidad_redondeo import formatear_cantidad_total
+
+            expected = formatear_cantidad_total(it[ck])
             if pdf_txt != expected:
                 diffs.append(f"{n}.{label}: PDF={pdf_txt!r} ctx={expected!r}")
         for vk in ("valor_actualizadas", "valor_presente", "valor_acumulado", "valor_saldo"):
@@ -170,15 +172,16 @@ def test_plataforma_pdf_excel_misma_secuencia_y_valores():
             if pdf_v != expected_money:
                 diffs.append(f"{n}.{vk}: PDF={pdf_v!r} expected={expected_money!r}")
 
-        # Excel: cantidades literales = ctx; fórmulas valor con ROUND(ROUND(,2)*VU,0)
+        # Excel: cantidades literales = ctx; valor = ROUND(cant×VU,0)
         r = excel_by_item.get(n)
         assert r is not None, f"ítem {n} no en Excel"
         assert float(ws.cell(r, 5).value) == float(it["cant_actualizadas"])
         assert float(ws.cell(r, 7).value) == float(it["cant_presente"])
-        assert ws.cell(r, 5).number_format == "#,##0.00"
+        assert ws.cell(r, 5).number_format == "#,##0.############"
         assert ws.cell(r, 6).number_format == '"$"#,##0.00'
         f_val = str(ws.cell(r, 6).value)
-        assert "ROUND(ROUND(" in f_val and ",0)" in f_val
+        assert "ROUND(" in f_val and ",0)" in f_val
+        assert "ROUND(ROUND(" not in f_val
 
     assert not diffs, "Diferencias plataforma/PDF:\n" + "\n".join(diffs)
 
@@ -225,15 +228,15 @@ def test_excel_subtotal_sum_rango_y_cd_suma_subtotales():
     assert ws.cell(cd_row, 6).value == "=F11+F13" or "F11" in str(ws.cell(cd_row, 6).value)
 
 
-def test_memoria_formatos_dim_3_cant_2():
+def test_memoria_formatos_dim_3_cant_regla_unica():
     inf = _import_informes_with_stubs()
     assert inf._EXCEL_NUM_FMT_DIM == "0.000"
-    assert inf._EXCEL_NUM_FMT_CANT == "#,##0.00"
+    assert inf._EXCEL_NUM_FMT_CANT == "#,##0.############"
     assert inf._EXCEL_NUM_FMT_MONEY == '"$"#,##0.00'
-    # Fórmula CANT TOT a 2 dp
     f = inf._excel_formula_cantidad_total(12)
-    assert "ROUND(" in f and "ROUND(" in f
-    assert ">=0.1" not in f  # ya no redondeo dinámico 2/3
+    assert "ROUND(" in f
+    assert "LET(" in f
+    assert ">=0.1" not in f
     assert inf._excel_formula_valor_cant_vu("E9", "D9") == (
-        '=IF(OR(D9="",E9=""),0,ROUND(ROUND(E9,2)*D9,0))'
+        '=IF(OR(D9="",E9=""),0,ROUND(E9*D9,0))'
     )

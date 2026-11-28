@@ -401,7 +401,8 @@ def test_vista_previa_pdf_y_excel_muestran_los_mismos_items():
         assert ws.cell(row, 1).value == it["item_numero"]
         assert ws.cell(row, 2).value == it["item_descripcion"]
         assert float(ws.cell(row, 5).value) == float(it["cant_actualizadas"])
-        assert "ROUND(ROUND(" in str(ws.cell(row, 6).value)
+        assert "ROUND(" in str(ws.cell(row, 6).value)
+        assert "ROUND(ROUND(" not in str(ws.cell(row, 6).value)
         assert book.eval_cell("CC-MES-001", row, 6) == it["valor_actualizadas"]
         assert book.eval_cell("CC-MES-001", row, 7) == it["cant_presente"]
         assert book.eval_cell("CC-MES-001", row, 8) == it["valor_presente"]

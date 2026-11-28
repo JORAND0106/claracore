@@ -16060,13 +16060,7 @@ function ModuloSicoeObra({
               return String(v)
             }
           }
-          const fmtQty = (v) => {
-            try {
-              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
-            } catch {
-              return String(v ?? '')
-            }
-          }
+          const fmtQty = (v) => formatearCantidadTotal(v, { empty: '0' })
           const allOn = filas.length > 0 && sel.size === filas.length
           const toggleAll = () => {
             if (filas.length === 0) return
@@ -16440,13 +16434,7 @@ function ModuloSicoeObra({
               return String(v)
             }
           }
-          const fmtQty = (v) => {
-            try {
-              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
-            } catch {
-              return String(v ?? '')
-            }
-          }
+          const fmtQty = (v) => formatearCantidadTotal(v, { empty: '0' })
           const allOn = filas.length > 0 && sel.size === filas.length
           const toggleAll = () => {
             if (filas.length === 0) return

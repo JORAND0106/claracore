@@ -9,16 +9,28 @@ import {
   redondearDimension,
 } from './sicoeCantidadRedondeo.js'
 
-describe('calcularCantidadConRedondeo', () => {
-  it('usa 3 decimales cuando ROUND(exacto,2) < 0.10', () => {
+describe('redondearCantidadTotalDinamico — regla única', () => {
+  it('entero → sin decimales (valor entero)', () => {
+    assert.equal(redondearCantidadTotalDinamico(24), 24)
+    assert.equal(calcularCantidadConRedondeo(2, 3, 4, 1), 24)
+    assert.equal(redondearCantidadTotalDinamico(5.004), 5)
+  })
+
+  it('no entero → 2 decimales', () => {
+    assert.equal(calcularCantidadConRedondeo(5, 0.3, null, null), 1.5)
+    assert.equal(redondearCantidadTotalDinamico(1.567), 1.57)
+  })
+
+  it('menor a 0,01: conserva decimales si 2 dp lo haría cero', () => {
     // 0.25 × 0.015 = 0.00375 → 0.004
     assert.equal(calcularCantidadConRedondeo(0.25, 0.015, null, null), 0.004)
     assert.equal(redondearCantidadTotalDinamico(0.00375), 0.004)
+    assert.equal(redondearCantidadTotalDinamico(0.009), 0.01) // 2 dp no es cero
   })
 
-  it('usa 2 decimales cuando ROUND(exacto,2) >= 0.10', () => {
-    assert.equal(calcularCantidadConRedondeo(5, 0.3, null, null), 1.5)
-    assert.equal(calcularCantidadConRedondeo(2, 3, 4, 1), 24)
+  it('varilla: peso 3 dp de entrada; Cant Total sigue la regla', () => {
+    // 6 × 0.994 × 4 = 23.856 → 23.86
+    assert.equal(redondearCantidadTotalDinamico(6 * 0.994 * 4), 23.86)
   })
 
   it('todos vacíos → 0; multiplica cantidad (× N)', () => {
@@ -42,10 +54,12 @@ describe('redondearDimension', () => {
 })
 
 describe('formatearCantidadTotal', () => {
-  it('muestra 3 decimales en valores chicos y 2 en el resto', () => {
-    assert.equal(decimalesCantidadTotal(0.004), 3)
+  it('entero sin decimales; 2 dp; chicos con los necesarios', () => {
+    assert.equal(decimalesCantidadTotal(24), 0)
     assert.equal(decimalesCantidadTotal(1.5), 2)
-    assert.equal(formatearCantidadTotal(0.004, { locale: false }), '0.004')
+    assert.equal(decimalesCantidadTotal(0.004), 3)
+    assert.equal(formatearCantidadTotal(24, { locale: false }), '24')
     assert.equal(formatearCantidadTotal(1.5, { locale: false }), '1.50')
+    assert.equal(formatearCantidadTotal(0.004, { locale: false }), '0.004')
   })
 })

@@ -1,7 +1,13 @@
 /**
- * Redondeo dinámico de cantidad_total (SICOE Obra).
- * Regla: si ROUND(exacto, 2) >= 0.10 → 2 decimales; si no → 3 decimales.
- * costo_directo no se toca aquí (sigue a 0 decimales en el llamador).
+ * Redondeo de Cant. Total (SICOE Obra) — regla única de plataforma.
+ *
+ * - Si el resultado (tras round a 2 dp) es entero → sin decimales (p. ej. 24).
+ * - Si no → 2 decimales.
+ * - Si el resultado exacto es < 0,01 y round a 2 quedaría 0 → se conservan
+ *   los decimales necesarios para que no quede en cero.
+ *
+ * Aplica al resultado (cantidad_total). Datos de entrada (p. ej. peso varilla
+ * a 3 dp) conservan sus propios decimales.
  */
 
 function _isEmpty(v) {
@@ -12,6 +18,11 @@ function _toFactor(v) {
   if (_isEmpty(v)) return 1
   const n = typeof v === 'number' ? v : parseFloat(v)
   return Number.isFinite(n) ? n : NaN
+}
+
+function _roundN(exact, dec) {
+  const f = 10 ** dec
+  return Math.round(exact * f) / f
 }
 
 /** Máximo de decimales persistidos en longitud/ancho/espesor/cantidad. */
@@ -43,13 +54,31 @@ export function formatearDimension(valor, opts = {}) {
   }
 }
 
-/** Aplica la regla de redondeo dinámico a un producto ya calculado. */
+/**
+ * Aplica la regla única a un producto ya calculado.
+ * @returns {number}
+ */
 export function redondearCantidadTotalDinamico(valorExacto) {
   const exact = Number(valorExacto)
   if (!Number.isFinite(exact)) return 0
-  const r2 = Math.round(exact * 100) / 100
-  if (r2 >= 0.1) return r2
-  return Math.round(exact * 1000) / 1000
+  if (exact === 0) return 0
+
+  const abs = Math.abs(exact)
+  const r2 = _roundN(exact, 2)
+
+  if (abs < 0.01) {
+    if (r2 !== 0) return r2
+    for (let d = 3; d <= 12; d += 1) {
+      const rd = _roundN(exact, d)
+      if (rd !== 0) return rd
+    }
+    return exact
+  }
+
+  if (Number.isInteger(r2) || Math.abs(r2 - Math.round(r2)) < 1e-9) {
+    return Math.round(r2)
+  }
+  return r2
 }
 
 /**
@@ -77,8 +106,17 @@ export function calcularCantidadConRedondeo(longitud, ancho, espesor, cantidad) 
 export function decimalesCantidadTotal(valor) {
   const n = Number(valor)
   if (!Number.isFinite(n)) return 2
-  const r2 = Math.round(n * 100) / 100
-  return r2 >= 0.1 ? 2 : 3
+  if (n === 0) return 0
+  const abs = Math.abs(n)
+  if (abs < 0.01) {
+    for (let d = 2; d <= 12; d += 1) {
+      if (_roundN(n, d) !== 0) return d
+    }
+    return 12
+  }
+  const r2 = _roundN(n, 2)
+  if (Number.isInteger(r2) || Math.abs(r2 - Math.round(r2)) < 1e-9) return 0
+  return 2
 }
 
 /**

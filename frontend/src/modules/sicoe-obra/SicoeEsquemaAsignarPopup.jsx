@@ -4,7 +4,12 @@
  * (el esquema no se borra). Sellados se pueden marcar/desmarcar (solo asignación).
  */
 import { useState } from 'react'
+import { formatearCantidadTotal } from './sicoeCantidadRedondeo.js'
 import { SICOE_HERRAMIENTA_POPUP_Z } from './sicoeZIndex'
+
+function fmtCantTotal(v) {
+  return formatearCantidadTotal(v, { empty: '—' })
+}
 
 function fmtMedidas(reg) {
   const L = reg?.longitud
@@ -144,7 +149,7 @@ export default function SicoeEsquemaAsignarPopup({
                     </td>
                     <td style={td}>{reg.item || reg.codigo_item || '—'}</td>
                     <td style={td}>{fmtMedidas(reg)}</td>
-                    <td style={td}>{reg.cantidad_total ?? reg.cant_total ?? '—'}</td>
+                    <td style={td}>{fmtCantTotal(reg.cantidad_total ?? reg.cant_total)}</td>
                   </tr>
                 )
               })}
