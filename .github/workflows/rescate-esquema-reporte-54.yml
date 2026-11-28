@@ -45,15 +45,29 @@ jobs:
           RESCATE_ASSIGN_ALL: ${{ github.event.inputs.assign_all || '0' }}
         working-directory: ./backend
         run: |
-          set -e
+          set -euo pipefail
           if [ -z "${AZURE_CREDENTIALS}" ]; then
             echo "AZURE_CREDENTIALS ausente" >&2
             exit 1
           fi
           mkdir -p "${RESCATE_OUT_DIR}"
-          PYTHONPATH=. python3 scripts/rescate_esquema_reporte_54.py | tee "${RESCATE_OUT_DIR}/stdout.json"
+          set +e
+          PYTHONPATH=. python3 scripts/rescate_esquema_reporte_54.py > "${RESCATE_OUT_DIR}/stdout.json" 2> "${RESCATE_OUT_DIR}/stderr.txt"
+          rc=$?
+          set -e
+          echo "script_exit=$rc"
+          cat "${RESCATE_OUT_DIR}/stderr.txt" || true
+          echo "==== STDOUT ===="
+          cat "${RESCATE_OUT_DIR}/stdout.json" || true
           echo "==== RESUMEN ===="
-          python3 -c "import json,sys; d=json.load(open('${RESCATE_OUT_DIR}/rescate_esquema_54_resumen.json')); print(json.dumps(d, indent=2, default=str)[:12000])"
+          if [ -f "${RESCATE_OUT_DIR}/rescate_esquema_54_resumen.json" ]; then
+            python3 -c "import json; d=json.load(open('${RESCATE_OUT_DIR}/rescate_esquema_54_resumen.json')); print(json.dumps(d, indent=2, default=str)[:16000])"
+          else
+            echo "sin resumen (script falló antes de escribir)"
+            ls -la "${RESCATE_OUT_DIR}" || true
+            exit "$rc"
+          fi
+          exit "$rc"
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4

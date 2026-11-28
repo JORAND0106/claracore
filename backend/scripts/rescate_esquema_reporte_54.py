@@ -142,34 +142,38 @@ def find_reporte(sb) -> Optional[dict]:
 
 
 def fetch_registros(sb, reporte_id: int) -> List[dict]:
-    cols = (
-        "id,reporte_id,contrato_id,numero_registro,item_numero,item_descripcion,"
-        "cantidad_total,cantidad,unidad,grafico_url,grafico_numero,grafico_descripcion,"
-        "graficos_historial,bloqueado,nivel1_estado,created_at,updated_at"
-    )
-    try:
-        r = (
-            sb.table("so_registros")
-            .select(cols)
-            .eq("reporte_id", reporte_id)
-            .order("numero_registro")
-            .execute()
-        )
-        return r.data or []
-    except Exception as e:
-        print(f"WARN fetch_registros cols: {e}", file=sys.stderr)
-        r = (
-            sb.table("so_registros")
-            .select(
-                "id,reporte_id,contrato_id,numero_registro,cantidad_total,"
-                "grafico_url,grafico_numero,grafico_descripcion,graficos_historial,"
-                "bloqueado,created_at,updated_at"
+    # so_registros: creado_en (no updated_at). Probar columnas y degradar.
+    col_sets = [
+        (
+            "id,reporte_id,contrato_id,numero_registro,item_numero,item_descripcion,"
+            "cantidad_total,cantidad,unidad,grafico_url,grafico_numero,grafico_descripcion,"
+            "graficos_historial,bloqueado,nivel1_estado,creado_en"
+        ),
+        (
+            "id,reporte_id,contrato_id,numero_registro,cantidad_total,"
+            "grafico_url,grafico_numero,grafico_descripcion,graficos_historial,"
+            "bloqueado,creado_en"
+        ),
+        (
+            "id,reporte_id,contrato_id,numero_registro,cantidad_total,"
+            "grafico_url,grafico_numero,grafico_descripcion,graficos_historial,bloqueado"
+        ),
+    ]
+    last_err = None
+    for cols in col_sets:
+        try:
+            r = (
+                sb.table("so_registros")
+                .select(cols)
+                .eq("reporte_id", reporte_id)
+                .order("numero_registro")
+                .execute()
             )
-            .eq("reporte_id", reporte_id)
-            .order("numero_registro")
-            .execute()
-        )
-        return r.data or []
+            return r.data or []
+        except Exception as e:
+            last_err = e
+            print(f"WARN fetch_registros ({cols[:40]}…): {e}", file=sys.stderr)
+    raise last_err or RuntimeError("fetch_registros falló")
 
 
 def inventory_from_registros(regs: List[dict]) -> Dict[str, Any]:
@@ -566,10 +570,20 @@ def restaurar(sb, reporte: dict, regs: List[dict], entrada: dict, ids_asignar: L
             "nivel1_estado": reg.get("nivel1_estado"),
         }
         sb.table("so_registros").update(body).eq("id", reg["id"]).execute()
-        after = sb.table("so_registros").select(
+        after = None
+        for cols in (
             "id,numero_registro,grafico_url,grafico_numero,grafico_descripcion,"
-            "cantidad_total,cantidad,bloqueado,nivel1_estado,graficos_historial"
-        ).eq("id", reg["id"]).single().execute().data
+            "cantidad_total,cantidad,bloqueado,nivel1_estado,graficos_historial",
+            "id,numero_registro,grafico_url,grafico_numero,grafico_descripcion,"
+            "cantidad_total,bloqueado,graficos_historial",
+        ):
+            try:
+                after = sb.table("so_registros").select(cols).eq("id", reg["id"]).single().execute().data
+                break
+            except Exception as e:
+                print(f"WARN after-select: {e}", file=sys.stderr)
+        if not after:
+            raise RuntimeError(f"No se pudo releer registro {reg['id']} tras patch")
         patched.append({
             "registro_id": reg["id"],
             "numero_registro": reg.get("numero_registro"),
