@@ -1,7 +1,7 @@
 /**
  * Tras guardar el PNG: elegir a qué registros del reporte se asigna el esquema.
- * Ninguna casilla marcada al crear; al menos uno. Sellados se pueden marcar/desmarcar
- * (solo cambia la asignación del esquema; no toca cantidades).
+ * Nuevo: al menos un registro. Reasignar: 0 casillas = desasignar todos → «Sin asignar»
+ * (el esquema no se borra). Sellados se pueden marcar/desmarcar (solo asignación).
  */
 import { useState } from 'react'
 import { SICOE_HERRAMIENTA_POPUP_Z } from './sicoeZIndex'
@@ -26,11 +26,14 @@ export default function SicoeEsquemaAsignarPopup({
   onConfirm,
   onCancel,
   busy = false,
+  /** 'nuevo' exige ≥1 registro; 'reasignar' permite 0 (= Sin asignar, no borra). */
+  mode = 'nuevo',
   /** Error del host (asignar falló): se muestra delante, completo, sin texto técnico. */
   hostError = '',
 }) {
   const [selected, setSelected] = useState(() => new Set((initialIds || []).map(String)))
   const [err, setErr] = useState('')
+  const allowEmpty = mode === 'reasignar'
 
   const toggle = (id) => {
     if (busy) return
@@ -44,7 +47,7 @@ export default function SicoeEsquemaAsignarPopup({
   }
 
   const confirmar = () => {
-    if (selected.size < 1) {
+    if (!allowEmpty && selected.size < 1) {
       setErr('Seleccione al menos un registro')
       return
     }
@@ -173,7 +176,9 @@ export default function SicoeEsquemaAsignarPopup({
             Cancelar
           </button>
           <button type="button" disabled={busy} onClick={confirmar} style={btnPrimary(ui)} data-testid="sicoe-esquema-asignar-ok">
-            {busy ? 'Guardando…' : 'Asignar'}
+            {busy
+              ? 'Guardando…'
+              : (allowEmpty && selected.size === 0 ? 'Dejar sin asignar' : 'Asignar')}
           </button>
         </div>
       </div>

@@ -308,12 +308,34 @@ export default function SicoeEsquemasReporteModal({
         if (!up?.ok) throw new Error(up?.error || 'No se pudo guardar el esquema')
         await reloadSinAsignar()
       } else {
-        const { patches } = planificarActualizacionVersionEsquema({
+        // Editar asignado: SIEMPRE propagar PNG+escena(+cálculos) a los registros.
+        let { patches } = planificarActualizacionVersionEsquema({
           registros: localRegs,
           entradaNueva: entrada,
           isSellado,
         })
-        if (patches.length) await aplicarPatches(patches)
+        // Si localRegs está desfasado y no encuentra el esquema, forzar por ids del target.
+        if (!patches.length && (target.registros || []).length) {
+          ;({ patches } = planificarAsignacionEsquema({
+            registros: localRegs,
+            entrada,
+            idsDeseados: target.registros.map((r) => r.id),
+            isSellado,
+          }))
+        }
+        if (!patches.length) {
+          // Nunca dar por guardado un upload huérfano: conservar como Sin asignar.
+          const up = await upsertEsquemaSinAsignar({
+            contratoId,
+            reporteId: reporte?.id,
+            entrada,
+          })
+          if (!up?.ok) throw new Error(up?.error || 'No se pudo guardar el esquema')
+          await reloadSinAsignar()
+          throw new Error('No se pudo guardar el esquema')
+        }
+        await aplicarPatches(patches)
+        // Mantener copia Sin asignar sincronizada no aplica: está asignado.
       }
       // Exportar no bloquea: PDF/DXF pueden llegar después (onExportsReady).
       ofrecerExportar(nombre, extras)
@@ -382,7 +404,8 @@ export default function SicoeEsquemasReporteModal({
 
   const confirmarAsignacion = async (ids) => {
     if (!pendingSave && assignMode !== 'reasignar') return
-    if (!ids?.length) {
+    // Nuevo: exige ≥1. Reasignar: 0 ids = desasignar todos → Sin asignar (no borra).
+    if (assignMode !== 'reasignar' && !ids?.length) {
       setAssignErr('Seleccione al menos un registro')
       return
     }
@@ -390,7 +413,7 @@ export default function SicoeEsquemasReporteModal({
     setErr('')
     setAssignErr('')
     try {
-      // Cambiar asignación: NUNCA re-sube PNG ni convierte data URI.
+      // Cambiar asignación: NUNCA re-sube PNG ni convierte data URI. NUNCA borra el esquema.
       if (assignMode === 'reasignar' && editTarget) {
         const entrada = entradaDesdeFilaLista(editTarget, reporte?.id)
         if (!entrada?.url) {
@@ -399,10 +422,17 @@ export default function SicoeEsquemasReporteModal({
         const { patches } = planificarAsignacionEsquema({
           registros: localRegs,
           entrada,
-          idsDeseados: ids,
+          idsDeseados: ids || [],
           isSellado,
         })
         if (!patches.length) {
+          if ((ids || []).length === 0 && (editTarget.sinAsignar || !(editTarget.registros || []).length)) {
+            // Ya estaba Sin asignar y sin casillas: cerrar.
+            setAssignOpen(false)
+            setEditTarget(null)
+            setPendingSave(null)
+            return
+          }
           if (editTarget.sinAsignar || !(editTarget.registros || []).length) {
             throw new Error('No se pudo asignar el esquema')
           }
@@ -413,18 +443,20 @@ export default function SicoeEsquemasReporteModal({
           return
         }
         await aplicarPatches(patches)
-        if (ids.length) {
+        if ((ids || []).length) {
           await removeEsquemaSinAsignar({
             contratoId,
             reporteId: reporte?.id,
             esquemaId: editTarget.esquema_id,
           })
         } else {
-          await upsertEsquemaSinAsignar({
+          // Desasignado de todos: el esquema sigue en la lista como Sin asignar.
+          const up = await upsertEsquemaSinAsignar({
             contratoId,
             reporteId: reporte?.id,
             entrada,
           })
+          if (!up?.ok) throw new Error(up?.error || 'No se pudo guardar el esquema')
         }
         await reloadSinAsignar()
         setAssignOpen(false)
@@ -688,6 +720,7 @@ export default function SicoeEsquemasReporteModal({
           titulo={assignMode === 'reasignar'
             ? `Cambiar asignación · ${editTarget?.nombre || 'Esquema'}`
             : 'Asignar esquema a registros'}
+          mode={assignMode === 'reasignar' ? 'reasignar' : 'nuevo'}
           busy={busy}
           hostError={assignErr}
           onCancel={cancelarAsignacion}

@@ -50,7 +50,7 @@ function regsReporte57() {
 }
 
 describe('sicoeEsquemasFlujo · punta a punta (#57)', () => {
-  it('flujo completo: guardar → asignar → reabrir → editar → reasignar + log', () => {
+  it('flujo completo: guardar → asignar → reabrir → editar → reasignar → Sin asignar + log', () => {
     const regs = regsReporte57()
     const isSellado = (r) => !!r._sellado
     const r = simularFlujoEsquemasE2E({
@@ -62,12 +62,13 @@ describe('sicoeEsquemasFlujo · punta a punta (#57)', () => {
     assert.ok(r.patchesAsignar.length >= 5, 'asignó a varios registros')
     assert.ok(r.patchesEditar.length >= 1, 'edición generó patches')
     assert.ok(r.patchesReasignar.length >= 1, 'reasignar generó patches')
+    assert.ok((r.patchesSinTodos || []).length >= 1, 'desasignar todos generó patches')
     assert.equal(r.sceneReabierta?.solids?.[0]?.height, 1.25)
     // Log con antes/después en cada cambio de asignación/edición
     const acciones = r.log.map((x) => x.accion)
     assert.deepEqual(
       acciones,
-      ['guardar_sin_asignar', 'asignar', 'reabrir', 'editar_guardar', 'reasignar'],
+      ['guardar_sin_asignar', 'asignar', 'reabrir', 'editar_guardar', 'reasignar', 'desasignar_todos_sin_asignar'],
     )
     assert.ok(r.log.find((x) => x.accion === 'asignar')?.antes)
     assert.ok(r.log.find((x) => x.accion === 'asignar')?.despues)
@@ -76,17 +77,17 @@ describe('sicoeEsquemasFlujo · punta a punta (#57)', () => {
       || Number(r.log.find((x) => x.accion === 'reasignar')?.quitado) === 439)
 
     // Patches nunca llevan cantidades
-    for (const p of [...r.patchesAsignar, ...r.patchesEditar, ...r.patchesReasignar]) {
+    for (const p of [...r.patchesAsignar, ...r.patchesEditar, ...r.patchesReasignar, ...(r.patchesSinTodos || [])]) {
       assert.equal(patchSoloCamposGrafico(p.body), true)
       assert.equal(p.body.cantidad_total, undefined)
     }
 
     const fila = r.lista.find((x) => x.esquema_id === 'esq-e2e-174')
     assert.ok(fila)
-    assert.equal(fila.sinAsignar, false)
-    const nums = fila.registros.map((x) => x.numero_registro).sort((a, b) => a - b)
-    assert.deepEqual(nums, [440, 442, 443, 624, 625])
-    // El esquema asignado aparece dentro de cada registro marcado (gráficos).
+    // Tras quitar de todos: Sin asignar, esquema intacto (no borrado).
+    assert.equal(fila.sinAsignar, true)
+    assert.ok(fila.url || fila.scene)
+    // Tras asignar (en el log) aparecía en cada registro marcado.
     const despuesAsignar = r.log.find((x) => x.accion === 'asignar')?.despues || []
     assert.ok(despuesAsignar.length >= 5)
     for (const reg of despuesAsignar) {

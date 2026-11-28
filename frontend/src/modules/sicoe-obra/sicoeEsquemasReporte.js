@@ -151,9 +151,15 @@ export function aligerarEscenaParaHistorial(scene) {
     }
     return c
   }
+  // Conserva solids3d + volumeCalcs (varios cálculos) y despiece: solo quita data-URIs.
   return {
     ...scene,
     objects: Array.isArray(scene.objects) ? scene.objects.map(slimObj) : scene.objects,
+    solids3d: Array.isArray(scene.solids3d) ? scene.solids3d.map(slimObj) : scene.solids3d,
+    volumeCalcs: Array.isArray(scene.volumeCalcs) ? scene.volumeCalcs : scene.volumeCalcs,
+    despieceSchedules: Array.isArray(scene.despieceSchedules)
+      ? scene.despieceSchedules
+      : scene.despieceSchedules,
     backgroundImage: typeof scene.backgroundImage === 'string'
       && scene.backgroundImage.startsWith('data:')
       ? null
