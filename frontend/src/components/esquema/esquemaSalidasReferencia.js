@@ -102,6 +102,23 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
     },
   },
   {
+    id: 'esquema-multi-calculo-cuadros',
+    label: 'Varios cálculos → un cuadro por cálculo, totales separados, sin total general (C-OUT-24)',
+    requires: {
+      header: true,
+      iso: true,
+      memoriaTable: true,
+      columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
+      headersIntact: ['Descuenta de', 'Operación', 'Color'],
+      noWordBreak: true,
+      cuadrosPorCalculoMin: 2,
+      sinTotalGeneral: true,
+      cadaCuadroConTitulo: true,
+      minFontFrac: ESQUEMA_DOC_MIN_FONT_FRAC,
+      exportView: 'iso-ne',
+    },
+  },
+  {
     id: 'memoria-volúmenes',
     label: 'PNG memoria de cálculo (encabezado + iso + tabla)',
     requires: {
@@ -142,6 +159,98 @@ export const ESQUEMA_SALIDAS_REFERENCIAS = Object.freeze([
  * Snapshot de prueba fijo (poceta perforada / desglose 1, 1.1…).
  * Estructura compatible con memoriaDisplayRows.
  */
+/**
+ * Varios cálculos (Poceta de encole): un snapshot por cálculo del panel.
+ * Usado por C-OUT-24 / referencia esquema-multi-calculo-cuadros.
+ */
+export function fixtureMultiCalculoPocetaSnapshots() {
+  return [
+    {
+      id: 'c-exc',
+      nombre: 'Excavación para Poceta',
+      totalM3: 40.27,
+      memoriaRows: [
+        {
+          numLabel: '1', num: 1, solidId: 'exc', nombre: 'Excavación para construcción de Poceta',
+          op: 'add', volumeM3: 40.27, color: '#a16207',
+          detail: { dimensiones: '4,20 × 3,40 × 2,82', formula: '4,20×3,40×2,82' },
+        },
+      ],
+      lines: [{ ok: true, solidId: 'exc', volumeM3: 40.27 }],
+    },
+    {
+      id: 'c-lim',
+      nombre: 'Concreto de Limpieza',
+      totalM3: 0.19,
+      memoriaRows: [
+        {
+          numLabel: '1', num: 1, solidId: 'lim', nombre: 'Concreto de limpieza',
+          op: 'add', volumeM3: 0.19, color: '#38bdf8',
+          detail: { dimensiones: '2,00 × 1,94 × 0,05', formula: '2,00×1,94×0,05' },
+        },
+      ],
+      lines: [{ ok: true, solidId: 'lim', volumeM3: 0.19 }],
+    },
+    {
+      id: 'c-base',
+      nombre: 'Concreto de bases',
+      totalM3: 0.86,
+      memoriaRows: [
+        {
+          numLabel: '1', num: 1, solidId: 'placa', nombre: 'Placa Fondo Poceta',
+          op: 'add', volumeM3: 0.86, color: '#1d4ed8',
+          detail: { dimensiones: '1,81 × 1,91 × 0,25', formula: '1,81×1,91×0,25' },
+        },
+      ],
+      lines: [{ ok: true, solidId: 'placa', volumeM3: 0.86 }],
+    },
+    {
+      id: 'c-elev',
+      nombre: 'Concreto de elevaciones',
+      totalM3: 2.49,
+      memoriaRows: [
+        {
+          numLabel: '1', num: 1, solidId: 'mp', nombre: 'Muro Posterior',
+          op: 'add', volumeM3: 0.64, color: '#0f766e',
+          detail: { dimensiones: '1,78 × 0,15 × 2,40', formula: '1,78×0,15×2,40' },
+        },
+        {
+          numLabel: '2', num: 2, solidId: 'ml1', nombre: 'Muro Lateral',
+          op: 'add', volumeM3: 0.5, color: '#be123c',
+          detail: { dimensiones: '0,15 × 1,50 × 2,20', formula: '0,15×1,50×2,20' },
+        },
+        {
+          numLabel: '3', num: 3, solidId: 'mf', nombre: 'Muro Frontal (exterior)',
+          op: 'add', volumeM3: 1.09, subIndex: 0, color: '#7c3aed',
+          detail: { dimensiones: '1,81 × 0,25 × 2,40', formula: '1,81×0,25×2,40' },
+        },
+        {
+          numLabel: '3.1', num: 3, solidId: 'pase', nombre: 'Pase',
+          op: 'subtract', volumeM3: 0.24, subIndex: 1, discountFromNombre: 'Muro Frontal',
+          color: '#7c3aed',
+          detail: { dimensiones: 'Ø 1,10 · L 0,25', formula: 'π×0,55²×0,25' },
+        },
+        {
+          numLabel: '3.2', num: 3, solidId: 'mf', nombre: 'Muro Frontal (neto)',
+          op: 'add', volumeM3: 0.85, isNetRow: true, netOpLabel: '3 − 3.1',
+          color: '#7c3aed',
+        },
+        {
+          numLabel: '4', num: 4, solidId: 'ml2', nombre: 'Muro Lateral',
+          op: 'add', volumeM3: 0.5, color: '#15803d',
+          detail: { dimensiones: '0,15 × 1,50 × 2,20', formula: '0,15×1,50×2,20' },
+        },
+      ],
+      lines: [
+        { ok: true, solidId: 'mp', volumeM3: 0.64 },
+        { ok: true, solidId: 'ml1', volumeM3: 0.5 },
+        { ok: true, solidId: 'mf', volumeM3: 0.85 },
+        { ok: true, solidId: 'ml2', volumeM3: 0.5 },
+      ],
+    },
+  ]
+}
+
 export function fixtureMemoriaPocetaSnapshot() {
   return {
     nombre: 'Poceta perforada',
@@ -268,6 +377,27 @@ export function verifySalidaAgainstReference(meta, refId) {
     }
     if (m.previewCropsImage === true) {
       errors.push('La vista previa no debe recortar la imagen')
+    }
+  }
+  // C-OUT-24: un cuadro por cálculo; sin total general.
+  if (req.cuadrosPorCalculoMin != null) {
+    const n = Number(m.cuadrosPorCalculo ?? (m.memoria || []).length ?? 0)
+    if (!(n >= req.cuadrosPorCalculoMin)) {
+      errors.push(`Se esperaban ≥${req.cuadrosPorCalculoMin} cuadros (uno por cálculo); hay ${n}`)
+    }
+  }
+  if (req.sinTotalGeneral) {
+    if (m.sinTotalGeneral === false || m.totalGeneralM3 != null) {
+      errors.push('No debe existir total general que sume distintos cálculos')
+    }
+  }
+  if (req.cadaCuadroConTitulo) {
+    const mem = m.memoria || []
+    for (const c of mem) {
+      if (!String(c?.nombre || '').trim()) {
+        errors.push('Cada cuadro debe llevar el nombre de su cálculo')
+        break
+      }
     }
   }
 
@@ -399,6 +529,25 @@ export function runApprovedSalidasVerification(opts = {}) {
     cellFontPx: Math.max(1, (planConMem.header?.width || 1600) / 55),
     width: planConMem.header?.width || 1600,
   }, 'esquema-preview-completa'))
+
+  // 5b) Varios cálculos → un cuadro por cálculo (C-OUT-24)
+  const multiSnaps = fixtureMultiCalculoPocetaSnapshots()
+  const planMulti = planEsquemaExportSalida({
+    title: 'Poceta de encole',
+    calcSnapshots: multiSnaps,
+    solids3d: solidFixture,
+  })
+  results.push(verifySalidaAgainstReference({
+    ...planMulti,
+    hasHeader: true,
+    hasIso: true,
+    hasMemoriaTable: !stripMemoriaTable && planMulti.hasMemoriaTable,
+    columns: planMulti.columnsRequired,
+    headersIntact: planMulti.headersIntact,
+    noWordBreak: true,
+    cellFontPx: Math.max(1, (planMulti.header?.width || 1600) / 55),
+    width: planMulti.header?.width || 1600,
+  }, 'esquema-multi-calculo-cuadros'))
 
   // 6) Memoria dedicada
   const headerMem = planEsquemaSalidaHeader({

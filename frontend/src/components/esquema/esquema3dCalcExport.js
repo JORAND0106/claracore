@@ -103,6 +103,96 @@ export function memoriaDisplayRows(snapshot) {
   return rows
 }
 
+/**
+ * C-OUT-24: números de identificación únicos en toda la imagen.
+ * Recorre los cálculos en orden del panel; el primer uso de cada sólido
+ * fija su #; si el sólido reaparece en otro cálculo, conserva el mismo #.
+ * No altera totales ni fórmulas de volumen — solo rótulos.
+ *
+ * @param {object[]} snapshots
+ * @returns {{
+ *   snapshots: object[],
+ *   labels: Array<{ solidId: string, num: number }>,
+ *   solidToNum: Map<string, number>,
+ * }}
+ */
+export function applyGlobalMemoriaNumbers(snapshots = []) {
+  const solidToNum = new Map()
+  let next = 1
+  const remapped = []
+
+  for (const snap of snapshots || []) {
+    const rowsIn = memoriaDisplayRows(snap)
+    // Asignar # a sólidos principales (no subfilas ni neto) en orden.
+    for (const row of rowsIn) {
+      if (!row?.solidId) continue
+      if (row.isNetRow) continue
+      if (row.subIndex != null && Number(row.subIndex) > 0) continue
+      if (!solidToNum.has(row.solidId)) {
+        solidToNum.set(row.solidId, next)
+        next += 1
+      }
+    }
+    const localToGlobal = new Map()
+    for (const row of rowsIn) {
+      if (row.isNetRow) continue
+      if (row.subIndex != null && Number(row.subIndex) > 0) continue
+      const local = Number(row.num) || Number(String(row.numLabel || '').split('.')[0]) || null
+      if (local != null && row.solidId && solidToNum.has(row.solidId)) {
+        localToGlobal.set(local, solidToNum.get(row.solidId))
+      }
+    }
+    const rows = rowsIn.map((row) => {
+      const r = { ...row }
+      const localBase = Number(String(r.numLabel || r.num || '').split('.')[0]) || Number(r.num) || 1
+      const sub = r.subIndex != null ? Number(r.subIndex) : (
+        String(r.numLabel || '').includes('.')
+          ? Number(String(r.numLabel).split('.')[1])
+          : null
+      )
+      let base = localToGlobal.get(localBase)
+      if (base == null && r.solidId && solidToNum.has(r.solidId)) {
+        base = solidToNum.get(r.solidId)
+      }
+      if (base == null) base = localBase
+
+      if (r.isNetRow) {
+        if (sub != null && Number.isFinite(sub) && sub > 0) {
+          r.num = base
+          r.numLabel = `${base}.${sub}`
+        } else {
+          r.num = base
+          r.numLabel = String(r.numLabel || base)
+        }
+        if (r.netOpLabel) {
+          r.netOpLabel = String(r.netOpLabel).replace(
+            new RegExp(`\\b${localBase}(\\.\\d+)?\\b`, 'g'),
+            (_, frac) => `${base}${frac || ''}`,
+          )
+        }
+        return r
+      }
+
+      if (sub != null && Number.isFinite(sub) && sub > 0) {
+        r.num = base
+        r.numLabel = `${base}.${sub}`
+      } else if (r.solidId) {
+        r.num = base
+        r.numLabel = String(base)
+      }
+      return r
+    })
+    remapped.push({
+      ...snap,
+      memoriaRows: rows,
+      _globalNumbersApplied: true,
+    })
+  }
+
+  const labels = [...solidToNum.entries()].map(([solidId, num]) => ({ solidId, num }))
+  return { snapshots: remapped, labels, solidToNum }
+}
+
 /** Etiquetas # a partir del snapshot (un número por sólido principal). */
 export function labelsFromSnapshot(snapshot) {
   const labels = []
@@ -355,6 +445,9 @@ export function renderMemoriaColorTableCanvas(snapshot, {
   const lineGap = Math.round(14 * fs)
   const colHeaderH = Math.round(44 * fs)
   const totalH = Math.round(40 * fs)
+  // C-OUT-24: título del cálculo encima del cuadro (uno por cálculo; no consolidar).
+  const calcTitle = String(snapshot?.nombre || '').trim()
+  const titleH = calcTitle ? Math.round(40 * fs) : 0
   const rows = memoriaDisplayRows(snapshot)
 
   // Medir filas (2 líneas máx) antes de fijar altura del canvas.
@@ -400,7 +493,7 @@ export function renderMemoriaColorTableCanvas(snapshot, {
     return { row, d, isSub, isNet, cells, wrapped, h }
   })
   const bodyH = Math.max(baseRowH, rowPlans.reduce((s, p) => s + p.h, 0))
-  const canvasH = colHeaderH + bodyH + totalH + margin
+  const canvasH = titleH + colHeaderH + bodyH + totalH + margin
 
   const canvas = document.createElement('canvas')
   canvas.width = canvasW
@@ -411,6 +504,22 @@ export function renderMemoriaColorTableCanvas(snapshot, {
 
   let x0 = margin
   let y0 = 0
+  if (titleH > 0) {
+    ctx.fillStyle = C.headerBg
+    ctx.fillRect(x0, y0, tableW, titleH)
+    ctx.strokeStyle = C.primary
+    ctx.lineWidth = 1.25 * fs
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, tableW - 1, titleH - 1)
+    ctx.fillStyle = C.primary
+    ctx.font = `bold ${Math.round(16 * fs)}px "Segoe UI", system-ui, sans-serif`
+    const titleLines = wrapMemoriaText(ctx, calcTitle, Math.max(8, tableW - 16), 2)
+    const blockH = titleLines.length * lineGap
+    const yStart = y0 + (titleH - blockH) / 2 + Math.round(13 * fs)
+    titleLines.forEach((ln, li) => {
+      ctx.fillText(ln, x0 + 8, yStart + li * lineGap)
+    })
+    y0 += titleH
+  }
   ctx.fillStyle = C.primary
   ctx.fillRect(x0, y0, tableW, colHeaderH)
   ctx.fillStyle = '#ffffff'
