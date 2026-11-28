@@ -32570,6 +32570,86 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
         pass
     return row
 
+
+@app.post("/sicoe-obra/{contrato_id}/corregir-cantidad-total-redondeo")
+def corregir_cantidad_total_redondeo(
+    contrato_id: int,
+    dry_run: bool = True,
+    current_user=Depends(get_current_user),
+):
+    """
+    Corrige cantidad_total (y costo_directo) de registros no sellados
+    según la regla única. Sellados no se tocan.
+    dry_run=true (default) solo informa el plan.
+    """
+    from sicoe_corregir_cantidad_total import plan_correccion_registros
+
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo desarrollador")
+    _require_contract_access(current_user, contrato_id)
+
+    cols = (
+        "id, contrato_id, longitud, ancho, espesor, cantidad, cantidad_total, "
+        "vlr_unitario, costo_directo, bloqueado, es_varilla, diametro_varilla, "
+        "peso_kg_m, " + SICOE_SELECT_NIVELES_ESTADO
+    )
+
+    def _fetch():
+        out = []
+        off = 0
+        while True:
+            batch = (
+                supabase.table("so_registros")
+                .select(cols)
+                .eq("contrato_id", contrato_id)
+                .order("id")
+                .range(off, off + 999)
+                .execute()
+                .data
+                or []
+            )
+            out.extend(batch)
+            if len(batch) < 1000:
+                break
+            off += 1000
+        return out
+
+    rows = supabase_execute(_fetch) or []
+
+    def _sellado(r: dict) -> bool:
+        if r.get("bloqueado") is True:
+            return True
+        return bool(_registro_nivel_max_aprobado(r, contrato_id))
+
+    plan = plan_correccion_registros(rows, es_sellado=_sellado)
+    if dry_run or plan["corregidos"] == 0:
+        plan["aplicado"] = False
+        return plan
+
+    aplicados = 0
+    for d in plan["detalle"]:
+        upd = {"cantidad_total": d["cantidad_total_despues"]}
+        if d.get("costo_directo_despues") is not None:
+            upd["costo_directo"] = d["costo_directo_despues"]
+
+        def _upd(pid=d["id"], payload=upd):
+            return (
+                supabase.table("so_registros")
+                .update(payload)
+                .eq("id", pid)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        supabase_execute(_upd)
+        aplicados += 1
+
+    plan["aplicado"] = True
+    plan["aplicados"] = aplicados
+    return plan
+
+
 class PuntoTopo(BaseModel):
     punto: Optional[str] = None
     norte: Optional[float] = None

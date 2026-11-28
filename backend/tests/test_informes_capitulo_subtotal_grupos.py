@@ -158,7 +158,8 @@ def test_excel_subtotales_formulas_y_cd_solo_items():
     assert ws.cell(cd_row, 6).number_format == '"$"#,##0.00'
     # Cantidades: 2 dp; acum/saldo con ROUND
     assert ws.cell(9, 7).value == 2.0
-    assert ws.cell(9, 5).number_format == "#,##0.00"
+    assert ws.cell(9, 5).number_format == "#,##0.############"
     assert str(ws.cell(9, 9).value) == "=ROUND(G9+1.0,2)"
     assert str(ws.cell(9, 11).value) == "=ROUND(E9-I9,2)"
-    assert "ROUND(ROUND(" in str(ws.cell(9, 6).value)
+    assert "ROUND(" in str(ws.cell(9, 6).value)
+    assert "ROUND(ROUND(" not in str(ws.cell(9, 6).value)

@@ -28,8 +28,9 @@ def test_normalizar_diametro():
 
 def test_pesos_ntc():
     assert sicoe_peso_kg_m_por_diametro("3/8") == 0.56
-    assert sicoe_peso_kg_m_por_diametro("1 1/4") == 6.40
-    assert sicoe_peso_kg_m_por_diametro("2 1/4") == 20.24
+    assert sicoe_peso_kg_m_por_diametro("1/2") == 0.994
+    assert sicoe_peso_kg_m_por_diametro("1 1/4") == 6.404
+    assert sicoe_peso_kg_m_por_diametro("2 1/4") == 20.239
 
 
 def test_calculo_varilla():
@@ -58,10 +59,10 @@ def test_preparar_varilla_ok():
     out, err = sicoe_validar_y_preparar_medicion_varilla(data, unidad="Kg")
     assert err is None
     assert out["diametro_varilla"] == "1/2"
-    assert out["peso_kg_m"] == 0.99
+    assert out["peso_kg_m"] == 0.994
     assert out["ancho"] is None
     assert out["espesor"] is None
-    assert out["cantidad_total"] == sicoe_calcular_cantidad_varilla(6, 0.99, 4)
+    assert out["cantidad_total"] == sicoe_calcular_cantidad_varilla(6, 0.994, 4)
 
 
 def test_preparar_varilla_diametro_invalido():

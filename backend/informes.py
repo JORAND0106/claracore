@@ -13964,26 +13964,41 @@ def _excel_formula_cantidad_total(row: int, *, es_varilla: bool = False) -> str:
     CANT TOT (cols D–G).
     Estándar: L×A×E×C (vacíos=1).
     Varilla: L×Peso×Cant — D=long, E=Ø (texto), F=peso kg/m, G=cant.
-    Redondeo a 2 dp (regla informe).
+    Regla única: entero sin dp; si no 2 dp; si |p|<0.01 y ROUND(p,2)=0 → más dp.
     """
     d, e, f, g = f"D{row}", f"E{row}", f"F{row}", f"G{row}"
     if es_varilla:
         prod = f'IF({d}="",1,{d})*IF({f}="",1,{f})*IF({g}="",1,{g})'
-        return f'=IF(AND({d}="",{f}="",{g}=""),0,ROUND({prod},2))'
-    prod = f'IF({d}="",1,{d})*IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})'
-    return f'=IF(AND({d}="",{e}="",{f}="",{g}=""),0,ROUND({prod},2))'
+        empty = f'AND({d}="",{f}="",{g}="")'
+    else:
+        prod = f'IF({d}="",1,{d})*IF({e}="",1,{e})*IF({f}="",1,{f})*IF({g}="",1,{g})'
+        empty = f'AND({d}="",{e}="",{f}="",{g}="")'
+    # p = producto; r2 = ROUND(p,2); si |p|<0.01 y r2=0 → ROUND(p,3) (o 4…); si r2 entero → INT.
+    return (
+        f'=IF({empty},0,'
+        f'LET(p,{prod},r2,ROUND(p,2),'
+        f'IF(ABS(p)<0.01,'
+        f'IF(r2<>0,r2,IF(ROUND(p,3)<>0,ROUND(p,3),IF(ROUND(p,4)<>0,ROUND(p,4),ROUND(p,5)))),'
+        f'IF(r2=INT(r2),INT(r2),r2))))'
+    )
 
 
 def _excel_formula_redondeo_cant_ref(cant_ref: str) -> str:
-    """Cantidad de informe: ROUND a 2 dp."""
-    return f"ROUND({cant_ref},2)"
+    """Cantidad de informe: misma regla única (aprox. Excel LET)."""
+    p = cant_ref
+    return (
+        f"LET(p,{p},r2,ROUND(p,2),"
+        f"IF(ABS(p)<0.01,"
+        f"IF(r2<>0,r2,IF(ROUND(p,3)<>0,ROUND(p,3),IF(ROUND(p,4)<>0,ROUND(p,4),ROUND(p,5)))),"
+        f"IF(r2=INT(r2),INT(r2),r2)))"
+    )
 
 
 def _excel_formula_valor_cant_vu(cant_ref: str, vu_ref: str) -> str:
-    """Valor = ROUND(ROUND(cantidad,2)×VU, 0) — misma regla que valor_por_cantidad_vu."""
+    """Valor = ROUND(Cant.Total ya redondeada × VU, 0)."""
     return (
         f'=IF(OR({vu_ref}="",{cant_ref}=""),0,'
-        f"ROUND(ROUND({cant_ref},2)*{vu_ref},0))"
+        f"ROUND({cant_ref}*{vu_ref},0))"
     )
 
 
@@ -16304,9 +16319,7 @@ def _fill_cc_conc_001_excel_ws(
                     vu_num = _excel_num_or_blank(vu)
                     if vu_num is None:
                         vu_num = 0.0
-                    cost_val = (
-                        f'=IF(OR(E{row}="",F{row}=""),0,ROUND(ROUND(F{row},2)*E{row},0))'
-                    )
+                    cost_val = _excel_formula_valor_cant_vu(f"F{row}", f"E{row}")
                     vals = [
                         cap_cell,
                         it.get("item_numero", ""),

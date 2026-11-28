@@ -326,7 +326,8 @@ def _assert_excel_si_vs_no(raw_no, raw_si, items, *, norma):
         assert book_si.eval_cell("CC-MES-001", row, col_cant_act) == it["cant_actualizadas"]
         assert book_si.eval_cell("CC-MES-001", row, col_val_act) == it["valor_actualizadas"]
         assert book_si.eval_cell("CC-MES-001", row, col_val_pres) == it["valor_presente"]
-        assert "ROUND(ROUND(" in str(ws_si.cell(row, col_val_act).value)
+        assert "ROUND(" in str(ws_si.cell(row, col_val_act).value)
+        assert "ROUND(ROUND(" not in str(ws_si.cell(row, col_val_act).value)
         assert ws_si.cell(row, col_val_act).number_format == ws_no.cell(filas_no[0], col_val_act).number_format
 
     subs_si = _subtotales(ws_si)

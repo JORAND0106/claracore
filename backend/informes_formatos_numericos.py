@@ -1,16 +1,12 @@
 """
 Formatos numéricos únicos CC-SUB / CC-MES (PDF y Excel).
 
-Una sola definición para ambos artefactos:
+- Dimensiones: 3 decimales (p. ej. 1.000).
+- Cantidades (Cant. Total y agregados): regla única SICOE
+  (entero sin dp; si no 2 dp; <0,01 con los dp necesarios).
+- Valores: Round0 mostrado con 2 decimales (p. ej. $ 13,239,136.00).
 
-- Dimensiones (longitud, ancho, espesor, cant unitaria memorias): 3 decimales
-  (p. ej. 1.000).
-- Cantidades (bloques, Cant. Total, subtotales de tramo): 2 decimales
-  (p. ej. 6.00).
-- Valores (ítems, subtotales, resumen, V. UNIT.): Round0 mostrado con 2
-  decimales (p. ej. $ 13,239,136.00).
-
-Solo presentación: no cambia la regla de cálculo.
+Presentación alineada a sicoe_cantidad_redondeo.
 """
 from __future__ import annotations
 
@@ -19,7 +15,8 @@ from typing import Any, Optional
 
 # ── Constantes Excel (number_format openpyxl) ────────────────────────────────
 EXCEL_FMT_DIM = "0.000"
-EXCEL_FMT_CANT = "#,##0.00"
+# Enteros sin forzar .00; decimales visibles según el valor ya redondeado.
+EXCEL_FMT_CANT = "#,##0.############"
 EXCEL_FMT_MONEY = '"$"#,##0.00'
 
 
@@ -47,11 +44,13 @@ def fmt_dim_informe(n: Any, *, empty: str = "—") -> str:
 
 
 def fmt_cant_informe(n: Any, *, empty: str = "—") -> str:
-    """Cantidad PDF: siempre 2 decimales (6.00)."""
+    """Cantidad PDF: misma regla única que formatear_cantidad_total."""
+    from sicoe_cantidad_redondeo import formatear_cantidad_total
+
     x = _to_float(n)
     if x is None:
         return empty
-    return f"{round(x, 2):,.2f}"
+    return formatear_cantidad_total(x, empty=empty)
 
 
 def fmt_money_informe(n: Any, *, empty: str = "—") -> str:

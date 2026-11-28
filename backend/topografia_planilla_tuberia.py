@@ -1708,11 +1708,13 @@ def _dim_sicoe_3(v: Any) -> Optional[float]:
 
 
 def _cantidad_total_desde_resumen(v: Any) -> Optional[float]:
-    """Cantidad del Resumen de Cantidades → 2 decimales (sin recalcular L×A×E)."""
+    """Cantidad del Resumen → regla única SICOE (sin recalcular L×A×E)."""
     if v is None or v == "":
         return None
     try:
-        return _r2(float(v))
+        from sicoe_cantidad_redondeo import redondear_cantidad_total_dinamico
+
+        return float(redondear_cantidad_total_dinamico(float(v)))
     except (TypeError, ValueError):
         return None
 
@@ -1736,7 +1738,7 @@ def dims_y_cantidad_registro_sicoe(
     """
     Payload dimensional para so_registros desde planilla:
       - solo Longitud / Ancho / Espesor (3 dec);
-      - cantidad_total = valor del resumen (2 dec), sin PRODUCT independiente;
+      - cantidad_total = valor del resumen (regla única SICOE), sin PRODUCT independiente;
       - el factor `cantidad` queda vacío (no es una 4ª dimensión).
     """
     return {

@@ -92,13 +92,14 @@ def test_sort_listado_no_manda_capitulo_vacio_al_final():
     assert [i["item_numero"] for i in out] == ["1.1", "2.4", "NP-07"]
 
 
-def test_fn_cant_informe_siempre_dos_decimales():
+def test_fn_cant_informe_regla_unica():
     from test_corte_sub_001_excel_filtro import _import_informes_with_stubs
 
     inf = _import_informes_with_stubs()
-    assert inf._fn_cant_informe(432903) == "432,903.00"
-    assert inf._fn_cant_informe(432903.0) == "432,903.00"
+    assert inf._fn_cant_informe(432903) == "432,903"
+    assert inf._fn_cant_informe(432903.0) == "432,903"
     assert inf._fn_cant_informe(21.14) == "21.14"
-    assert inf._fn_cant_informe(0) == "0.00"
+    assert inf._fn_cant_informe(0) == "0"
     assert inf._fn_cant_informe(432903.77) == "432,903.77"
-    assert inf._fn_cant_informe(6.005) == "6.00"
+    assert inf._fn_cant_informe(6.01) == "6.01"
+    assert inf._fn_cant_informe(0.004) == "0.004"

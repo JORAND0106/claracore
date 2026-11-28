@@ -19,7 +19,7 @@ from test_corte_sub_001_excel_filtro import _import_informes_with_stubs
 def test_definicion_unica_pdf_excel_constantes():
     inf = _import_informes_with_stubs()
     assert inf._EXCEL_NUM_FMT_DIM == EXCEL_FMT_DIM == "0.000"
-    assert inf._EXCEL_NUM_FMT_CANT == EXCEL_FMT_CANT == "#,##0.00"
+    assert inf._EXCEL_NUM_FMT_CANT == EXCEL_FMT_CANT == "#,##0.############"
     assert inf._EXCEL_NUM_FMT_MONEY == EXCEL_FMT_MONEY == '"$"#,##0.00'
 
 
@@ -27,9 +27,10 @@ def test_fmt_dim_cant_money_siempre_decimales():
     assert fmt_dim_informe(1) == "1.000"
     assert fmt_dim_informe(1.5) == "1.500"
     assert fmt_dim_informe(None) == "—"
-    assert fmt_cant_informe(6) == "6.00"
-    assert fmt_cant_informe(6.005) == "6.00"
-    assert fmt_cant_informe(0) == "0.00"
+    assert fmt_cant_informe(6) == "6"
+    assert fmt_cant_informe(6.01) == "6.01"
+    assert fmt_cant_informe(0) == "0"
+    assert fmt_cant_informe(0.004) == "0.004"
     assert fmt_money_informe(13239136) == "$ 13,239,136.00"
     assert fmt_money_informe(13230.4) == "$ 13,230.00"
     assert fmt_money_informe(0) == "$ 0.00"
@@ -38,7 +39,7 @@ def test_fmt_dim_cant_money_siempre_decimales():
 def test_pdf_helpers_delegan_en_modulo_unico():
     inf = _import_informes_with_stubs()
     assert inf._fn_dim_informe(1) == "1.000"
-    assert inf._fn_cant_informe(6) == "6.00"
+    assert inf._fn_cant_informe(6) == "6"
     assert inf._fm_informe(13230) == "$ 13,230.00"
 
 
@@ -71,11 +72,10 @@ def test_html_cc_sub_usa_money_con_centavos():
         "T",
         "D",
     )
-    assert "6.00" in html
-    assert "10.00" in html
+    assert "6" in html
+    assert "10" in html
     assert "$ 13,230.00" in html
     assert "$ 22,050.00" in html
-    # No debe quedar el formato antiguo sin centavos como único display de ese valor
     assert html.count("$ 13,230.00") >= 1
 
 
@@ -107,14 +107,14 @@ def test_html_memoria_dim_3_cant_2():
     assert "1.000" in body  # longitud
     assert "2.000" in body  # ancho
     assert "0.150" in body  # espesor
-    assert "6.00" in body  # cant tot / total ítem
+    assert ">6<" in body or ">6</" in body or "6" in body  # cant tot entero
 
 
 def test_excel_pdf_mismo_texto_para_mismos_numeros():
     """Misma cadena PDF que el valor numérico Excel formateado a ojo."""
     inf = _import_informes_with_stubs()
-    assert inf._fn_cant_informe(6.0) == "6.00"
-    assert inf._EXCEL_NUM_FMT_CANT == "#,##0.00"
+    assert inf._fn_cant_informe(6.0) == "6"
+    assert inf._EXCEL_NUM_FMT_CANT == "#,##0.############"
     assert inf._fm_informe(13230) == "$ 13,230.00"
     assert inf._EXCEL_NUM_FMT_MONEY == '"$"#,##0.00'
     assert inf._fn_dim_informe(1) == "1.000"

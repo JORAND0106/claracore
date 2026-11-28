@@ -8137,13 +8137,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       return String(v)
     }
   }
-  const fmtCantResumenItemTab = (v) => {
-    try {
-      return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
-    } catch {
-      return String(v ?? '—')
-    }
-  }
+  const fmtCantResumenItemTab = (v) => formatearCantidadTotal(v, { empty: '—' })
 
   /** Una fila compacta: datos del ítem + totales de cantidad y costo directo en las líneas de esta pestaña. */
   const renderResumenEconomicoLineaItem = (regsTab, claveItem) => {
@@ -16060,13 +16054,7 @@ function ModuloSicoeObra({
               return String(v)
             }
           }
-          const fmtQty = (v) => {
-            try {
-              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
-            } catch {
-              return String(v ?? '')
-            }
-          }
+          const fmtQty = (v) => formatearCantidadTotal(v, { empty: '0' })
           const allOn = filas.length > 0 && sel.size === filas.length
           const toggleAll = () => {
             if (filas.length === 0) return
@@ -16440,13 +16428,7 @@ function ModuloSicoeObra({
               return String(v)
             }
           }
-          const fmtQty = (v) => {
-            try {
-              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
-            } catch {
-              return String(v ?? '')
-            }
-          }
+          const fmtQty = (v) => formatearCantidadTotal(v, { empty: '0' })
           const allOn = filas.length > 0 && sel.size === filas.length
           const toggleAll = () => {
             if (filas.length === 0) return
