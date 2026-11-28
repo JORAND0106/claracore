@@ -115,6 +115,7 @@ import { filterObjectsFor3dDraw } from './esquema3dEntityUnity'
 import {
   applyWorldDeltaToEntity,
   canvasDeltaToWorldMove,
+  canvasToWorldOnViewPlane,
   editorCanvasFill,
   extrudeModeForView,
   isEsquema3dDrawView,
@@ -265,6 +266,13 @@ import {
   createCotaRadio,
   drawCota,
 } from './esquemaCota'
+import {
+  createCota3d,
+  isCota3d,
+  projectCota3dForView,
+  snapHasWorld3d,
+  syncBoundCotas3d,
+} from './esquemaCota3d'
 import { createAreaLabelFromClick, drawAreaLabel } from './esquemaArea'
 import { esquemaEntityInk, esquemaUiTheme, resolveEsquemaUi } from './esquemaTheme'
 import {
@@ -1178,14 +1186,17 @@ export default function EsquemaEditorModal({
       })
       : list
     for (const obj of list3d) {
-      // 2D restante: proyectar al espacio 3D (órbita/iso/cara) para no quedar plano en pantalla.
-      const drawObj = mode3dRef.current
-        ? projectEntityToView(
+      // Cotas 3D: proyección desde worldA/B (medida real). Resto 2D: remap de viewPlane.
+      let drawObj = obj
+      if (mode3dRef.current && isCota3d(obj)) {
+        drawObj = projectCota3dForView(obj, viewIdDraw, orbitDraw)
+      } else if (mode3dRef.current) {
+        drawObj = projectEntityToView(
           { ...obj, viewPlane: obj.viewPlane || 'top' },
           viewIdDraw,
           { orbit: orbitDraw },
         )
-        : obj
+      }
       drawObject(ctx, drawObj, selSet.has(obj.id) || obj.id === solevarHoverIdRef.current, {
         skipTablaText: obj.type === 'tabla' && obj.id === hideOverlayTablaId,
         skipTextoText: obj.type === 'texto' && obj.id === hideOverlayTextId,
@@ -2146,6 +2157,7 @@ export default function EsquemaEditorModal({
       const next = (solids3dRef.current || []).map((s) => (s.id === r.solid.id ? r.solid : s))
       solids3dRef.current = next
       setSolids3d(next)
+      refreshBoundCotas3d(next)
       setSelectedSolidIds([r.solid.id])
       if (ent) {
         selectOne(ent.id)
@@ -2606,6 +2618,8 @@ export default function EsquemaEditorModal({
     setView3d(vid)
     cutDraftRef.current = null
     if (op3dRef.current === 'cortar') setOp3d(null)
+    // Cotas 3D: actualizar proyección 2D de la vista (hit-test y manijas).
+    refreshBoundCotas3d(solids3dRef.current)
     const labels = {
       top: 'superior',
       bottom: 'inferior',
@@ -2615,8 +2629,8 @@ export default function EsquemaEditorModal({
       right: 'lateral derecha',
     }
     setToolHint(isEsquema3dDrawView(vid)
-      ? `Vista ${labels[vid] || vid}: puede dibujar y extruir sobre esta cara.`
-      : 'Vista isométrica: solo inspección (no dibujo).')
+      ? `Vista ${labels[vid] || vid}: puede dibujar, acotar y extruir sobre esta cara.`
+      : 'Vista isométrica: inspección, mover y acotado (sin dibujar figuras).')
     setOrbitTick((n) => n + 1)
     setPanTick((n) => n + 1)
   }, [])
@@ -3282,7 +3296,14 @@ export default function EsquemaEditorModal({
       }
       if (bestFace) {
         snapRef.current = bestFace
-        return { x: bestFace.x, y: bestFace.y }
+        return {
+          x: bestFace.x,
+          y: bestFace.y,
+          world: bestFace.world || null,
+          solidId: bestFace.solidId || null,
+          snapKind: bestFace.kind || null,
+          faceDepthWorld: bestFace.faceDepthWorld,
+        }
       }
     }
     const hit = findSnap(p, snapSearchObjects(), {
@@ -3518,6 +3539,70 @@ export default function EsquemaEditorModal({
     redraw()
   }
 
+  /** Ancla de cota 3D: world del OSNAP o unproject del plano de la vista (caras). */
+  const cota3dAnchorFromPoint = (pt) => {
+    if (!pt) return null
+    if (snapHasWorld3d(pt)) {
+      return {
+        x: pt.x,
+        y: pt.y,
+        world: pt.world,
+        solidId: pt.solidId || null,
+        snapKind: pt.snapKind || pt.kind || null,
+      }
+    }
+    const viewId = normalizeViewId(view3dRef.current || 'top')
+    if (!isEsquema3dDrawView(viewId)) return null
+    const depth = Number.isFinite(Number(pt.faceDepthWorld))
+      ? Number(pt.faceDepthWorld)
+      : 0
+    const world = canvasToWorldOnViewPlane(pt, viewId, { faceDepthWorld: depth })
+    return {
+      x: pt.x,
+      y: pt.y,
+      world,
+      solidId: null,
+      snapKind: null,
+    }
+  }
+
+  /** Cota lineal: 3D real si hay anclas world; si no, H/V 2D de siempre. */
+  const buildLinearCota = (a, b, extras = {}) => {
+    if (!mode3dRef.current) {
+      return createCota(a, b, extras)
+    }
+    const viewId = normalizeViewId(view3dRef.current || 'top')
+    const isoOrOrbit = isEsquema3dIsoView(viewId) || !!orbitFreeRef.current
+    const anchorA = cota3dAnchorFromPoint(a)
+    const anchorB = cota3dAnchorFromPoint(b)
+    if (isoOrOrbit && (!anchorA || !anchorB)) {
+      setToolHint('Acotado: enganche dos puntos OSNAP del sólido (vértice, medio o centro)')
+      return null
+    }
+    if (anchorA && anchorB) {
+      return createCota3d(anchorA, anchorB, {
+        ...extras,
+        viewPlane: viewId,
+      })
+    }
+    return createCota(a, b, extras)
+  }
+
+  /** Tras mover/editar sólidos: cotas amarradas acompañan y actualizan medida. */
+  const refreshBoundCotas3d = (solids = solids3dRef.current) => {
+    const viewId = normalizeViewId(view3dRef.current || 'top')
+    const orbit = currentOrbitCamera()
+    const { objects, changed } = syncBoundCotas3d(objectsRef.current || [], solids || [], {
+      viewId,
+      orbit,
+    })
+    if (changed) {
+      objectsRef.current = objects
+      setDirty(true)
+    }
+    return changed
+  }
+
   const commitCotaObj = (shape) => {
     if (!shape) return false
     pushHistory()
@@ -3669,12 +3754,17 @@ export default function EsquemaEditorModal({
       ? !!includeImages
       : (tool === 'seleccion' || tool === 'escalar-imagen')
     const objs = objectsRef.current
+    const viewId = normalizeViewId(view3dRef.current || 'top')
+    const orbit = mode3dRef.current ? currentOrbitCamera() : null
     for (let i = objs.length - 1; i >= 0; i -= 1) {
       const o = objs[i]
       if (o.type === 'image') {
         if (!allowImg || o.fit) continue
       }
-      if (pointInObject(p, o)) return o
+      const hitObj = (mode3dRef.current && isCota3d(o))
+        ? projectCota3dForView(o, viewId, orbit)
+        : o
+      if (pointInObject(p, hitObj)) return o
     }
     return null
   }
@@ -4219,9 +4309,8 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Giro libre 3D: si hay sólido bajo el clic + Mover → traslación en planta;
-    // si no, arrastre = orbitar cámara (no modifica geometría).
-    if (mode3dRef.current && orbitFreeRef.current) {
+    // Giro libre 3D: acotado permitido; si no, sólido+Mover o orbitar cámara.
+    if (mode3dRef.current && orbitFreeRef.current && currentTool !== 'cota') {
       const hitOrbit = (currentTool === 'seleccion' && selectModeRef.current === 'mover')
         ? hitSolid3dAt(p)
         : null
@@ -4278,8 +4367,8 @@ export default function EsquemaEditorModal({
       redraw()
       return
     }
-    if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current)) {
-      // Isométrica: inspección + mover en planta (cotas no cambian). Sin dibujar.
+    if (mode3dRef.current && isEsquema3dIsoView(view3dRef.current) && currentTool !== 'cota') {
+      // Isométrica: inspección + mover en planta + acotado (C-2D-06). Sin dibujar figuras.
       if (currentTool === 'seleccion' || currentTool === 'paneo') {
         const hitS = hitSolid3dAt(p)
         if (hitS) {
@@ -4320,7 +4409,7 @@ export default function EsquemaEditorModal({
         redraw()
         return
       }
-      setToolHint('Vista isométrica: selección y mover en planta. Cambie a una cara (sup/inf/front/post/izq/der) para dibujar.')
+      setToolHint('Vista isométrica: selección, mover y acotado. Cambie a una cara (sup/inf/front/post/izq/der) para dibujar.')
       drawing.current = false
       return
     }
@@ -5258,6 +5347,7 @@ export default function EsquemaEditorModal({
         const next = (solids3dRef.current || []).map((s) => (s.id === d.solidId ? moved : s))
         solids3dRef.current = next
         setSolids3d(next)
+        refreshBoundCotas3d(next)
         setDirty(true)
         redraw()
         return
@@ -5406,7 +5496,25 @@ export default function EsquemaEditorModal({
         shape = applyMeasureToShape(shape, currentTool, startPt.current, p)
       }
       shape.label = measureLabelFor(currentTool, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 })
-      if (shape.type === 'cota') shape.text = cotaText(shape)
+      if (shape.type === 'cota') {
+        const preview = buildLinearCota(startPt.current, p, {
+          offset: Number.isFinite(shape.offset) ? shape.offset : DEFAULT_COTA_OFFSET,
+          color: shape.color,
+          width: shape.width,
+        })
+        if (preview) {
+          shape = {
+            ...shape,
+            ...preview,
+            id: shape.id,
+            label: preview.text,
+          }
+          shape.text = cotaText(shape)
+          shape.label = shape.text
+        } else {
+          shape.text = cotaText(shape)
+        }
+      }
       draftRef.current = shape
       setLiveMeasure(shape.label)
       updateDynHud(dynBufferRef.current || shape.label, !!dynBufferRef.current)
@@ -5533,6 +5641,7 @@ export default function EsquemaEditorModal({
             setToolHint('Conectado automáticamente al extremo cercano.')
           }
         }
+        refreshBoundCotas3d(solids3dRef.current)
       }
       dragRef.current = null
       moveGuideRef.current = null
@@ -5599,15 +5708,22 @@ export default function EsquemaEditorModal({
       shape.label = measureLabelFor(currentTool, a, b)
       if (shape.type === 'cota') {
         shape.offset = Number.isFinite(shape.offset) ? shape.offset : DEFAULT_COTA_OFFSET
+        const built = buildLinearCota(startPt.current || a, p || b, shape)
+        if (!built) {
+          draftRef.current = null
+          snapRef.current = null
+          redraw()
+          return
+        }
+        shape = { ...built, id: shape.id, label: built.text || shape.label }
         shape.text = cotaText(shape)
-        shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
       }
       pushHistory()
       const placed = withViewDepth3d(shape)
       objectsRef.current = [...objectsRef.current, placed]
       selectOne(placed.id)
       if (SHAPE_TOOLS.has(placed.type)) syncMeasureFromObject(placed)
-      setLiveMeasure(placed.label)
+      setLiveMeasure(placed.label || placed.text)
       setDirty(true)
       draftRef.current = null
       snapRef.current = null
@@ -6132,14 +6248,17 @@ export default function EsquemaEditorModal({
       if (dist(a, b) < 1) return false
       shape.label = measureLabelFor(toolRef.current, a, b)
       if (shape.type === 'cota') {
-        shape = { ...createCota(a, b, shape), id: shape.id, label: shape.label }
+        const built = buildLinearCota(startPt.current || a, lastPt.current || b, shape)
+        if (!built) return false
+        shape = { ...built, id: shape.id, label: built.text || shape.label }
+        shape.text = cotaText(shape)
       }
       pushHistory()
       const placedDyn = withViewDepth3d(shape)
       objectsRef.current = [...objectsRef.current, placedDyn]
       selectOne(placedDyn.id)
       if (SHAPE_TOOLS.has(placedDyn.type)) syncMeasureFromObject(placedDyn)
-      setLiveMeasure(placedDyn.label)
+      setLiveMeasure(placedDyn.label || placedDyn.text)
       setDirty(true)
       draftRef.current = null
       drawing.current = false
