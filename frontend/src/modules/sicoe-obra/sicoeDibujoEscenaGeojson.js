@@ -6,7 +6,11 @@
  * Soporta tipos de dibujo: nodo | linea | poligono.
  * Nodo + entidad de biblioteca: Point (marcador LOD) + Polygon del bloque insertado.
  */
-import { worldToMeters, PX_PER_METER } from '../../components/esquema/esquemaGeometry.js'
+import {
+  worldToMeters,
+  PX_PER_METER,
+  objectWorldPoint,
+} from '../../components/esquema/esquemaGeometry.js'
 import { packLibraryBlock } from '../../components/esquema/esquemaLibrary.js'
 import { normalizarTipoDibujo, contarPuntosEscena } from './sicoeDibujoTipos.js'
 import { gkBogotaToWgs84 } from '../../utils/epsg3116.js'
@@ -43,6 +47,14 @@ function closeRing(ring) {
 function ptsToLngLat(pts, origin) {
   const out = []
   for (const p of pts || []) {
+    // Preferir Gauss sellado en el vértice (tabla de coordenadas / nodos).
+    if (Number.isFinite(Number(p?.este)) && Number.isFinite(Number(p?.norte))) {
+      const ll = gkBogotaToWgs84(Number(p.este), Number(p.norte))
+      if (ll && Number.isFinite(ll.lng) && Number.isFinite(ll.lat)) {
+        out.push([ll.lng, ll.lat])
+        continue
+      }
+    }
     const ll = worldPointToLngLat(p.x, p.y, origin)
     if (!ll) return null
     out.push(ll)
@@ -59,6 +71,27 @@ function isClosedPolyline(obj) {
   return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y)) < 1e-6
 }
 
+/**
+ * Aplica `obj.rotation` alrededor del centro de la entidad (misma convención
+ * que el lienzo / objectWorldPoint). Sin rotación devuelve los puntos tal cual.
+ */
+export function applyObjectRotationToPoints(obj, pts) {
+  const list = Array.isArray(pts) ? pts : []
+  const rot = Number(obj?.rotation) || 0
+  if (!rot || !list.length) {
+    return list.map((p) => ({
+      x: Number(p.x),
+      y: Number(p.y),
+      ...(Number.isFinite(Number(p?.este)) ? { este: Number(p.este) } : {}),
+      ...(Number.isFinite(Number(p?.norte)) ? { norte: Number(p.norte) } : {}),
+    }))
+  }
+  return list.map((p) => {
+    const w = objectWorldPoint(obj, { x: Number(p.x), y: Number(p.y) })
+    return { x: w.x, y: w.y }
+  })
+}
+
 /** Extrae anillo(s) en coords mundo desde un objeto de escena (solo cerrados). */
 export function objectWorldRings(obj) {
   if (!obj || typeof obj !== 'object') return []
@@ -68,7 +101,7 @@ export function objectWorldRings(obj) {
     if (pts.length < 3) return []
     if (!isClosedPolyline(obj) && type === 'stroke') return []
     if (!isClosedPolyline(obj) && type === 'polilinea') return []
-    return [pts.map((p) => ({ x: Number(p.x), y: Number(p.y) }))]
+    return [applyObjectRotationToPoints(obj, pts)]
   }
   if (type === 'rect') {
     const x1 = Number(obj.x1)
@@ -76,22 +109,26 @@ export function objectWorldRings(obj) {
     const x2 = Number(obj.x2)
     const y2 = Number(obj.y2)
     if (![x1, y1, x2, y2].every(Number.isFinite)) return []
-    return [[
+    return [applyObjectRotationToPoints(obj, [
       { x: x1, y: y1 },
       { x: x2, y: y1 },
       { x: x2, y: y2 },
       { x: x1, y: y2 },
-    ]]
+    ])]
   }
   if (type === 'triangulo') {
     const pts = Array.isArray(obj.points) ? obj.points : []
     if (pts.length >= 3) {
-      return [pts.slice(0, 3).map((p) => ({ x: Number(p.x), y: Number(p.y) }))]
+      return [applyObjectRotationToPoints(obj, pts.slice(0, 3))]
     }
     return []
   }
+  if (type === 'elipse') {
+    const ring = ellipseRingLocal(obj)
+    return ring ? [applyObjectRotationToPoints(obj, ring)] : []
+  }
   if (type === 'hatch' && Array.isArray(obj.outer)) {
-    return [obj.outer.map((p) => ({ x: Number(p.x), y: Number(p.y) }))]
+    return [applyObjectRotationToPoints(obj, obj.outer)]
   }
   if (type === 'bloque') {
     const ring = bloqueWorldCorners(obj)
@@ -589,13 +626,19 @@ export function objectDetalleWorldParts(obj, { parentBloque = null } = {}) {
   if (type === 'polilinea' || type === 'stroke') {
     const pts = (Array.isArray(obj.points) ? obj.points : [])
       .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
-      .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
+      .map((p) => ({
+        x: Number(p.x),
+        y: Number(p.y),
+        ...(Number.isFinite(Number(p.este)) ? { este: Number(p.este) } : {}),
+        ...(Number.isFinite(Number(p.norte)) ? { norte: Number(p.norte) } : {}),
+      }))
     if (pts.length < 2) return []
+    const world = applyObjectRotationToPoints(obj, pts)
     const closed = isClosedPolyline(obj)
-    if (closed && pts.length >= 3) {
-      return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: type } }]
+    if (closed && world.length >= 3) {
+      return [{ kind: 'polygon', points: xf(world), meta: { escena_tipo: type } }]
     }
-    return [{ kind: 'line', points: xf(pts), meta: { escena_tipo: type } }]
+    return [{ kind: 'line', points: xf(world), meta: { escena_tipo: type } }]
   }
 
   if (type === 'rect') {
@@ -604,14 +647,15 @@ export function objectDetalleWorldParts(obj, { parentBloque = null } = {}) {
     const x2 = Number(obj.x2)
     const y2 = Number(obj.y2)
     if (![x1, y1, x2, y2].every(Number.isFinite)) return []
+    const world = applyObjectRotationToPoints(obj, [
+      { x: x1, y: y1 },
+      { x: x2, y: y1 },
+      { x: x2, y: y2 },
+      { x: x1, y: y2 },
+    ])
     return [{
       kind: 'polygon',
-      points: xf([
-        { x: x1, y: y1 },
-        { x: x2, y: y1 },
-        { x: x2, y: y2 },
-        { x: x1, y: y2 },
-      ]),
+      points: xf(world),
       meta: { escena_tipo: 'rect' },
     }]
   }
@@ -622,13 +666,21 @@ export function objectDetalleWorldParts(obj, { parentBloque = null } = {}) {
       .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
       .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
     if (pts.length < 3) return []
-    return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: 'triangulo' } }]
+    return [{
+      kind: 'polygon',
+      points: xf(applyObjectRotationToPoints(obj, pts)),
+      meta: { escena_tipo: 'triangulo' },
+    }]
   }
 
   if (type === 'elipse') {
     const ring = ellipseRingLocal(obj)
     if (!ring) return []
-    return [{ kind: 'polygon', points: xf(ring), meta: { escena_tipo: 'elipse' } }]
+    return [{
+      kind: 'polygon',
+      points: xf(applyObjectRotationToPoints(obj, ring)),
+      meta: { escena_tipo: 'elipse' },
+    }]
   }
 
   if (type === 'hatch' && Array.isArray(obj.outer) && obj.outer.length >= 3) {
@@ -636,7 +688,11 @@ export function objectDetalleWorldParts(obj, { parentBloque = null } = {}) {
       .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
       .map((p) => ({ x: Number(p.x), y: Number(p.y) }))
     if (pts.length < 3) return []
-    return [{ kind: 'polygon', points: xf(pts), meta: { escena_tipo: 'hatch' } }]
+    return [{
+      kind: 'polygon',
+      points: xf(applyObjectRotationToPoints(obj, pts)),
+      meta: { escena_tipo: 'hatch' },
+    }]
   }
 
   return []
@@ -736,6 +792,110 @@ export function esquemaEscenaToDetalleGeojson(escena, meta = {}) {
   }
   const features = partsToFeatures(parts, origin, baseProps)
   return { type: 'FeatureCollection', features }
+}
+
+function featuresFromStoredGeojson(dg) {
+  if (dg == null) return []
+  if (dg?.type === 'FeatureCollection') {
+    return Array.isArray(dg.features) ? dg.features : []
+  }
+  if (dg?.type === 'Feature') return [dg]
+  if (dg?.type && dg?.coordinates) {
+    return [{ type: 'Feature', geometry: dg, properties: {} }]
+  }
+  return []
+}
+
+/**
+ * Fuente canónica de la geometría del reporte en plano (ClaraGIS, refs, auditoría).
+ * Prioridad: dibujo_escena (misma conversión que al guardar) → dibujo_geojson persistido.
+ * No modifica la escena ni la tabla de coordenadas.
+ *
+ * @param {{ dibujo_escena?: object|null, dibujo_geojson?: object|null, perimetro_geojson?: object|null, id?: any, reporte_id?: any }} reporte
+ * @returns {{ type: 'FeatureCollection', features: object[], origen_geometria: 'escena'|'geojson'|'vacio' }}
+ */
+export function geojsonCanonicoDesdeReporte(reporte) {
+  const rid = reporte?.id ?? reporte?.reporte_id ?? null
+  const escena = reporte?.dibujo_escena
+  if (escena && typeof escena === 'object') {
+    const objects = Array.isArray(escena.objects) ? escena.objects : []
+    const origin = originLngLatPreferGauss(escena, objects)
+    if (origin && objects.length) {
+      const fc = esquemaSceneToGeojson(objects, origin, {
+        reporteId: rid,
+        dibujoTipo: escena.dibujo_tipo || escena.tipo,
+        entidad: escena.entidad_biblioteca || null,
+      })
+      if (Array.isArray(fc?.features) && fc.features.length) {
+        return { ...fc, origen_geometria: 'escena' }
+      }
+    }
+    // Detalle (bloques con hijos) si el resumen no produjo features.
+    const detailed = esquemaEscenaToDetalleGeojson(escena, {
+      reporteId: rid,
+      dibujoTipo: escena.dibujo_tipo,
+    })
+    if (Array.isArray(detailed?.features) && detailed.features.length) {
+      return { ...detailed, origen_geometria: 'escena' }
+    }
+  }
+  const stored = reporte?.dibujo_geojson || reporte?.perimetro_geojson
+  const feats = featuresFromStoredGeojson(stored)
+  if (feats.length) {
+    return {
+      type: 'FeatureCollection',
+      features: feats,
+      origen_geometria: 'geojson',
+    }
+  }
+  return { type: 'FeatureCollection', features: [], origen_geometria: 'vacio' }
+}
+
+/**
+ * Compara vértices del anillo guardado (escena) vs los que vería ClaraGIS.
+ * @returns {{ ok: boolean, maxDiffM: number, n: number, origen: string }}
+ */
+export function compararVerticesEscenaVsClaraGis(reporte, { tolM = 0.01 } = {}) {
+  const canon = geojsonCanonicoDesdeReporte(reporte)
+  const poly = (canon.features || []).find((f) => (
+    f?.geometry?.type === 'Polygon' || f?.geometry?.type === 'MultiPolygon'
+  ))
+  if (!poly) {
+    return { ok: false, maxDiffM: Infinity, n: 0, origen: canon.origen_geometria }
+  }
+  const ring = poly.geometry.type === 'Polygon'
+    ? (poly.geometry.coordinates?.[0] || [])
+    : (poly.geometry.coordinates?.[0]?.[0] || [])
+  const escena = reporte?.dibujo_escena
+  const objects = Array.isArray(escena?.objects) ? escena.objects : []
+  const origin = originLngLatPreferGauss(escena, objects)
+  if (!origin) {
+    return { ok: false, maxDiffM: Infinity, n: 0, origen: canon.origen_geometria }
+  }
+  let maxDiffM = 0
+  let n = 0
+  for (const obj of objects) {
+    for (const ringW of objectWorldRings(obj)) {
+      const lnglat = ptsToLngLat(ringW, origin)
+      if (!lnglat) continue
+      for (let i = 0; i < lnglat.length && i < ring.length; i += 1) {
+        const [lng0, lat0] = lnglat[i]
+        const [lng1, lat1] = ring[i]
+        const midLat = ((lat0 + lat1) / 2) * Math.PI / 180
+        const dx = (lng1 - lng0) * 111320 * Math.cos(midLat)
+        const dy = (lat1 - lat0) * 111320
+        const d = Math.hypot(dx, dy)
+        if (d > maxDiffM) maxDiffM = d
+        n += 1
+      }
+    }
+  }
+  return {
+    ok: n > 0 && maxDiffM <= tolM,
+    maxDiffM,
+    n,
+    origen: canon.origen_geometria,
+  }
 }
 
 export { contarPuntosEscena }

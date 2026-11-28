@@ -550,9 +550,16 @@ export default function ModuloPlanoMapaCalor({
         features: Array.isArray(data.features) ? data.features : [],
       }
       // Dibujos del botón Dibujar / huellas del conjunto filtrado (vienen en analisis).
-      const dibujosFeats = Array.isArray(data.dibujos?.features)
+      // Si hay dibujo_escena, regenerar geometría canónica (giro/forma) sin tocar la escena.
+      const dibujosRaw = Array.isArray(data.dibujos?.features)
         ? data.dibujos.features
         : []
+      const escenasPorReporte = data.dibujos?.escenas_por_reporte || {}
+      let dibujosFeats = dibujosRaw
+      try {
+        const { reconciliarDibujosConEscenas } = await import('./sicoeClaraGisGeometria.js')
+        dibujosFeats = reconciliarDibujosConEscenas(dibujosRaw, escenasPorReporte)
+      } catch { /* keep raw */ }
       allHuellasRef.current = dibujosFeats
       setPuntosFc(fc)
       setMeta(data.meta || null)

@@ -148,6 +148,10 @@ def build_dibujos_mapa_calor(
     1) dibujo_geojson / perimetro_geojson del reporte (botón Dibujar)
     2) huella_geojson del registro (propagación / dibujo masivo)
 
+    Si el reporte trae `dibujo_escena`, se incluye en `escenas_por_reporte` para
+    que el cliente regenere la geometría canónica (giro/forma) sin alterar la
+    escena guardada.
+
     Un reporte con dibujo aporta una sola geometría (o FC completo) asociada a
     `reporte_id`; no se duplica por cada ítem del reporte.
     """
@@ -168,6 +172,7 @@ def build_dibujos_mapa_calor(
 
     seen_reps: set = set()
     features: List[dict] = []
+    escenas_por_reporte: Dict[str, Any] = {}
 
     for r in registros or []:
         rid_rep = r.get("reporte_id")
@@ -180,6 +185,11 @@ def build_dibujos_mapa_calor(
 
         rep = reporte_map.get(rid_rep) or reporte_map.get(rep_key) or {}
         dg = rep.get("dibujo_geojson") or rep.get("perimetro_geojson")
+        escena = rep.get("dibujo_escena")
+        if isinstance(escena, dict) and (
+            isinstance(escena.get("objects"), list) and len(escena.get("objects") or []) > 0
+        ):
+            escenas_por_reporte[rep_key] = escena
         peers = regs_by_rep.get(rep_key) or [r]
 
         # CD del dibujo = suma de los registros filtrados del reporte (no el total del reporte).
@@ -213,13 +223,30 @@ def build_dibujos_mapa_calor(
         if sum_w <= 0 and sum_costo >= 0:
             sum_w = 0.05
 
-        if _reporte_geojson_tiene_dibujo(dg):
+        has_escena = rep_key in escenas_por_reporte
+        if _reporte_geojson_tiene_dibujo(dg) or has_escena:
             peer0 = peers[0]
             item_peer = next(
                 (p.get("item_numero") for p in peers if p.get("item_numero")),
                 peer0.get("item_numero"),
             )
-            for feat in features_desde_dibujo_reporte(dg, rid_rep):
+            # Placeholder si solo hay escena: el cliente regenera con escenas_por_reporte.
+            feats_src = (
+                features_desde_dibujo_reporte(dg, rid_rep)
+                if _reporte_geojson_tiene_dibujo(dg)
+                else [{
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [0.0, 0.0]},
+                    "properties": {
+                        "origen": "reporte_dibujo",
+                        "reporte_id": rid_rep,
+                        "huella_tipo": "poligono",
+                        "dibujo_tipo": "poligono",
+                        "placeholder_escena": 1,
+                    },
+                }]
+            )
+            for feat in feats_src:
                 props = dict(feat.get("properties") or {})
                 props.update({
                     "weight": round(sum_w, 6),
@@ -279,6 +306,7 @@ def build_dibujos_mapa_calor(
     return {
         "type": "FeatureCollection",
         "features": features,
+        "escenas_por_reporte": escenas_por_reporte,
         "meta": {
             "total": len(features),
             "reportes_con_dibujo": len({
@@ -286,6 +314,7 @@ def build_dibujos_mapa_calor(
                 for f in features
                 if (f.get("properties") or {}).get("origen") == "reporte_dibujo"
             }),
+            "reportes_con_escena": len(escenas_por_reporte),
         },
     }
 
