@@ -1049,9 +1049,56 @@ export default function EsquemaEditorModal({
   /** Selección de nodos desde la tabla de coordenadas (N°). */
   const selectNodesByNums = (nums, { additive = false } = {}) => {
     const want = new Set((nums || []).map((n) => String(n)))
-    const nodes = (objectsRef.current || []).filter((o) => (
+    // Si aún no hay nodos en el lienzo (p. ej. tabla precargada en Dibujar reporte),
+    // materializa solo los N° pedidos desde la tabla sin borrar el resto de la escena.
+    let nodes = (objectsRef.current || []).filter((o) => (
       o?.type === 'nodo' && want.has(String(o.nodeNum))
     ))
+    if (!nodes.length && want.size) {
+      const rows = (coordRowsRef.current || []).filter((r) => want.has(String(r?.num)))
+      if (rows.length) {
+        const origin = coordOriginRef.current || coordOriginFromRows(coordRowsRef.current || rows)
+        if (origin && Number.isFinite(origin.este0) && Number.isFinite(origin.norte0)) {
+          coordOriginRef.current = origin
+          const created = []
+          for (const r of rows) {
+            const norte = Number(r.norte)
+            const este = Number(r.este)
+            if (!Number.isFinite(norte) || !Number.isFinite(este)) continue
+            if ((objectsRef.current || []).some((o) => o?.type === 'nodo' && String(o.nodeNum) === String(r.num))) {
+              continue
+            }
+            const pt = topoToWorld(este, norte, origin)
+            created.push({
+              id: uid(),
+              type: 'nodo',
+              x: pt.x,
+              y: pt.y,
+              nodeNum: r.num,
+              norte,
+              este,
+              cota: r.cota !== '' && r.cota != null && Number.isFinite(Number(r.cota))
+                ? Number(r.cota)
+                : null,
+              desc: String(r.desc || ''),
+              color: colorRef.current,
+              fromCoordTable: true,
+            })
+          }
+          if (created.length) {
+            objectsRef.current = [...(objectsRef.current || []), ...created]
+            setDirty(true)
+            if (huellaMode || mapActiveRef.current) {
+              try { syncCanvasToMapRef.current() } catch { /* ignore */ }
+            }
+            try { redrawRef.current?.() } catch { /* ignore */ }
+          }
+        }
+      }
+      nodes = (objectsRef.current || []).filter((o) => (
+        o?.type === 'nodo' && want.has(String(o.nodeNum))
+      ))
+    }
     if (!nodes.length && !additive) {
       selectIds([])
       return
@@ -4294,15 +4341,6 @@ export default function EsquemaEditorModal({
       return
     }
 
-    // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura).
-    // En modo 3D el mapa está oculto: el lienzo maneja paneo/gestos.
-    if (mapActiveRef.current && !mode3dRef.current && toolRef.current === 'paneo') {
-      try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
-      pointersRef.current.delete(e.pointerId)
-      drawing.current = false
-      return
-    }
-
     // Dos dedos → pellizco (zoom). No iniciar dibujo ni pan con el segundo puntero.
     if (pointersRef.current.size >= 2) {
       beginPinchIfNeeded()
@@ -4312,6 +4350,39 @@ export default function EsquemaEditorModal({
 
     let p = posFromEvent(e)
     const currentTool = toolRef.current
+
+    // Inserción libre de biblioteca: tiene prioridad sobre paneo/mapa.
+    // En Dibujar reporte (huella + mapa + paneo por defecto) el canvas puede tener
+    // pointerEvents:none en paneo; beginInsertLibraryItem cambia a selección, y
+    // además consumimos el clic aquí antes del early-return de paneo.
+    if (pendingInsertRef.current) {
+      const pending = pendingInsertRef.current
+      const item = pending?.item || pending
+      const onPlane = !!(pending?.onPlane || huellaMode || mapActiveRef.current)
+      p = snapWorldPoint(p)
+      const placed = onPlane
+        ? instantiateLibraryItemAtRealScale(item, p)
+        : instantiateLibraryItem(item, p)
+      pushHistory()
+      objectsRef.current = [...objectsRef.current, ...placed]
+      pendingInsertRef.current = null
+      setInsertHint('')
+      selectIds(placed.map((o) => o.id))
+      setDirty(true)
+      drawing.current = false
+      if (onPlane) syncCanvasToMapRef.current()
+      redraw()
+      return
+    }
+
+    // Con mapa activo + Paneo: el mapa recibe el arrastre (canvas sin captura).
+    // En modo 3D el mapa está oculto: el lienzo maneja paneo/gestos.
+    if (mapActiveRef.current && !mode3dRef.current && toolRef.current === 'paneo') {
+      try { c.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+      pointersRef.current.delete(e.pointerId)
+      drawing.current = false
+      return
+    }
 
     // Zoom ventana: trazar rectángulo (2D, vistas planas, iso y giro libre).
     if (currentTool === 'zoom-ventana') {
@@ -4521,25 +4592,6 @@ export default function EsquemaEditorModal({
       try { setSidebarCollapsed(false) } catch { /* ignore */ }
       try { onReferenciaClickRef.current(info) } catch { /* ignore */ }
       return true
-    }
-    if (pendingInsertRef.current) {
-      const pending = pendingInsertRef.current
-      const item = pending?.item || pending
-      const onPlane = !!(pending?.onPlane || huellaMode || mapActiveRef.current)
-      p = snapWorldPoint(p)
-      const placed = onPlane
-        ? instantiateLibraryItemAtRealScale(item, p)
-        : instantiateLibraryItem(item, p)
-      pushHistory()
-      objectsRef.current = [...objectsRef.current, ...placed]
-      pendingInsertRef.current = null
-      setInsertHint('')
-      selectIds(placed.map((o) => o.id))
-      setDirty(true)
-      drawing.current = false
-      if (onPlane) syncCanvasToMapRef.current()
-      redraw()
-      return
     }
     drawing.current = true
 
@@ -6105,17 +6157,18 @@ export default function EsquemaEditorModal({
       selectIds(placed.map((o) => o.id))
       setDirty(true)
       setTool('seleccion')
+      toolRef.current = 'seleccion'
       if (onPlane) syncCanvasToMapRef.current()
       redraw()
       return
     }
+    // Libre: salir de paneo (mapa+paneo deja el canvas sin eventos) y pedir el punto.
     pendingInsertRef.current = { item, onPlane, free: true }
-    const label = formatLibraryMeasuresLabel(item)
-    setInsertHint(onPlane
-      ? `Clic para insertar «${item.nombre}» a escala 1:1${label ? ` (${label})` : ''}`
-      : `Clic para insertar «${item.nombre}»`)
+    setInsertHint('Toque el punto de inserción')
     setLibNotice('')
     setLibOpen(false)
+    setTool('seleccion')
+    toolRef.current = 'seleccion'
   }
 
   // Reaplicar medida al cambiar el input solo si está armada (digitada por el usuario)
@@ -6676,11 +6729,12 @@ export default function EsquemaEditorModal({
             ? 'Área: clic dentro de una región cerrada (rectas y curvas). El valor queda en m².'
             : '')
     : ''
-  const insertHintVisible = dibujoTipoRef.current === 'nodo'
+  // Inserción de biblioteca: el hint aplica en cualquier tipo (nodo/línea/polígono)
+  // y también en Dibujar reporte (huella), donde vive en la barra CMD.
   const pickFromMapHint = pickNodoFromMap
     ? 'Toque un punto del plano para agregar un nodo con sus coordenadas Gauss.'
     : ''
-  const canvasHint = toolHint || pickFromMapHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || (insertHintVisible ? insertHint : '')
+  const canvasHint = toolHint || pickFromMapHint || rotateHint || polyHint || mirrorHint || arrayHint || cotaKindHint || insertHint || ''
 
   /** Vista actual (mapa + capa dibujo) → data URL PNG cruda, sin encabezado. */
   const captureHuellaVistaRaw = async () => {
@@ -9312,7 +9366,7 @@ export default function EsquemaEditorModal({
                 opacity: mode3d ? 0 : mapOpacity,
                 visibility: mode3d ? 'hidden' : 'visible',
                 zIndex: 0,
-                pointerEvents: (mode3d || !(tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap)) ? 'none' : 'auto',
+                pointerEvents: (mode3d || !(tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap && !insertHint)) ? 'none' : 'auto',
                 background: '#fff',
               }}
             />
@@ -9327,8 +9381,10 @@ export default function EsquemaEditorModal({
               background: (mapActive && !mode3d) ? 'transparent' : ui.canvas,
               borderRadius: 8, touchAction: 'none',
               outline: 'none',
-              pointerEvents: (mapActive && !mode3d && tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap) ? 'none' : 'auto',
-              cursor: (printAreaSelecting || pickNodoFromMap)
+              // Con insertHint (modo libre de biblioteca) el lienzo debe recibir el toque
+              // aunque el mapa esté en paneo (caso típico de Dibujar reporte / huella).
+              pointerEvents: (mapActive && !mode3d && tool === 'paneo' && !printAreaSelecting && !pickNodoFromMap && !insertHint) ? 'none' : 'auto',
+              cursor: (printAreaSelecting || pickNodoFromMap || insertHint)
                 ? 'crosshair'
                 : hoverCursor
                 || (tool === 'paneo' ? 'grab'

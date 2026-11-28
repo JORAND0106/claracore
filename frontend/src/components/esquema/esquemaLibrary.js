@@ -151,7 +151,7 @@ export function packLibraryBlock(objects) {
 
 /** Instancia el ítem como un único bloque centrado en `at`. */
 export function instantiateLibraryItem(item, at) {
-  const packed = packLibraryBlock(item?.objects)
+  const packed = packLibraryBlock(item?.objects || item?.children)
   const children = packed.children.map((o) => offsetObject(o, 0, 0, { renewId: true }))
   return [{
     type: 'bloque',
