@@ -14,6 +14,7 @@ import {
   pointOnEllipseToward,
 } from './esquemaGeometry.js'
 import { esquemaEntityInk, resolveEsquemaUi } from './esquemaTheme.js'
+import { cota3dText, isCota3d } from './esquemaCota3d.js'
 
 export { DEFAULT_COTA_OFFSET, DEFAULT_ANGLE_RADIUS }
 
@@ -33,6 +34,7 @@ export function cotaText(obj) {
     const d2 = { x: (obj.x3 || 0) - v.x, y: (obj.y3 || 0) - v.y }
     return formatAngleDeg(angleDegBetween(d1, d2))
   }
+  if (kind === 'linear3d' || isCota3d(obj)) return cota3dText(obj)
   const L = cotaLayout(obj)
   if (kind === 'radio') return `R ${formatMeters(L.len)}`
   if (kind === 'diametro') return `⌀ ${formatMeters(L.len)}`

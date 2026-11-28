@@ -10,6 +10,7 @@ import { drawNorthIndicator, landscapeExportSize, objectBoundsOf } from './esque
 import { partitionBackgroundFirst } from './esquemaZOrder.js'
 import { drawSolids3dLayered, linkedSourceEntityIds, solidXyBounds } from './esquema3dSolids.js'
 import { projectWorld3dToCanvas, solidsViewCamera } from './esquema3dViews.js'
+import { isCota3d, projectCota3dForView } from './esquemaCota3d.js'
 import {
   ESQUEMA_DOC_CONTAINER_H,
   ESQUEMA_DOC_CONTAINER_W,
@@ -332,6 +333,13 @@ export function drawExportCoordTable(ctx, nodes, x, y, width, opts = {}) {
   return headerH + rows.length * rowH
 }
 
+/** Proyecta cotas 3D a la vista de exportación (iso-ne / top). */
+export function projectObjectsCotas3dForExport(objects, viewId, orbit = null) {
+  return (objects || []).map((o) => (
+    isCota3d(o) ? projectCota3dForView(o, viewId, orbit) : o
+  ))
+}
+
 /**
  * Dimensiones del PNG rotulado (sin rasterizar). Útil para tests y presupuestos.
  * @param {{ objects?: object[], nodes?: object[], solids3d?: object[], view3d?: string, orbit?: object|null }} opts
@@ -344,13 +352,14 @@ export function computeEsquemaExportSize({ objects, nodes, solids3d, view3d, orb
   const exportView = resolveEsquemaExportView3d(solids)
   void view3d // la vista activa del editor no decide la exportación
   const linked = solids.length ? linkedSourceEntityIds(solids) : null
-  const objs2d = linked
+  const objsRaw = linked
     ? (objects || []).filter((o) => o && !linked.has(o.id))
     : (objects || [])
-  const bb2d = sceneExportBounds(objs2d)
   const cam = solids.length
     ? (orbit || solidsViewCamera(exportView, solids, { orbitFree: false }))
     : null
+  const objs2d = projectObjectsCotas3dForExport(objsRaw, exportView, cam)
+  const bb2d = sceneExportBounds(objs2d)
   const bb3d = solids.length ? solidsExportBounds(solids, exportView, cam) : null
   const bb = mergeExportBounds(
     objs2d.length ? bb2d : null,
@@ -511,12 +520,13 @@ export async function composeEsquemaExport({
   void orbit // órbita libre del editor no se usa; cámara canónica iso-ne / top
   const mode3d = solids.length > 0 && typeof drawSolid === 'function'
   const linked = mode3d ? linkedSourceEntityIds(solids) : null
-  const objs2d = linked
+  const objsRaw = linked
     ? (objects || []).filter((o) => o && !linked.has(o.id))
     : (objects || [])
   const cam = mode3d
     ? solidsViewCamera(exportView, solids, { orbitFree: false })
     : null
+  const objs2d = projectObjectsCotas3dForExport(objsRaw, exportView, cam)
   const layout = computeEsquemaExportSize({
     objects: objs2d,
     nodes: snaps.length ? [] : rows, // con memoria, coords van aparte o se omiten del layout base

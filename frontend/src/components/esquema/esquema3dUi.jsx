@@ -93,7 +93,7 @@ export function Esquema3dViewToolbar({
       })}
       {!isEsquema3dDrawView(current) ? (
         <span style={{ ...ghost(t), fontSize: 'var(--cc-caption)', opacity: 0.85 }}>
-          Vista isométrica: solo inspección
+          Vista isométrica: inspección y acotado
         </span>
       ) : null}
     </span>
