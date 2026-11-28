@@ -9,6 +9,8 @@ from topografia_planilla_tuberia import (
     migrar_filas_campo_al_cambiar_tipo,
     RELACIONES_ATRAQUE,
     TIPOS_PLANILLA,
+    _floor_area_2dec,
+    _floor_area_tubo_filtro_2dec,
     altura_relleno_atraque_m,
     area_1_m2,
     area_2_m2,
@@ -67,6 +69,79 @@ class TestAreasSegmentoCircular(unittest.TestCase):
         self.assertAlmostEqual(a1 + a2, a_tub, places=3)
         den = 3
         self.assertNotAlmostEqual(a2, a_tub * (1 - 1 / den), places=3)
+
+
+class TestFloorAreaDescuento2dec(unittest.TestCase):
+    """A1/A2: floor decimal a 2; tubo filtro min 0.01; FILTRO A2=0."""
+
+    def test_floor_area_casos_interv(self):
+        self.assertEqual(_floor_area_2dec(0.475), 0.47)
+        self.assertEqual(_floor_area_2dec(0.4752), 0.47)
+        self.assertEqual(_floor_area_2dec(0.47), 0.47)
+        self.assertEqual(_floor_area_2dec(0.009), 0.0)
+        self.assertEqual(_floor_area_2dec(0.01), 0.01)
+        # No sesgo float: 0.58 no debe bajar a 0.57
+        self.assertEqual(_floor_area_2dec(0.58), 0.58)
+
+    def test_tubo_filtro_min_001(self):
+        self.assertEqual(_floor_area_tubo_filtro_2dec(0.008), 0.01)
+        self.assertEqual(_floor_area_tubo_filtro_2dec(0.009), 0.01)
+        self.assertEqual(_floor_area_tubo_filtro_2dec(0.012), 0.01)
+        self.assertEqual(_floor_area_tubo_filtro_2dec(0.0), 0.0)
+
+    def test_seccion_alc_areas_floor_2(self):
+        sec = calcular_seccion(
+            tipo="ALCANTARILLA",
+            diametro_m=0.9,
+            espesor_m=0.05,
+            ancho_excavacion_m=1.5,
+            relacion_atraque="1:3",
+        )
+        a1_geo = area_1_m2(0.9, 0.05, 1.5, "1:3", altura_relleno_m=sec["altura_relleno_m"])
+        a2_geo = area_2_m2(0.9, 0.05, "1:3", area_1=a1_geo)
+        self.assertEqual(sec["area_1_m2"], _floor_area_2dec(a1_geo))
+        self.assertEqual(sec["area_2_m2"], _floor_area_2dec(a2_geo))
+        self.assertEqual(sec["area_1_m2"], _floor_area_2dec(sec["area_1_m2"]))
+        self.assertEqual(sec["area_2_m2"], _floor_area_2dec(sec["area_2_m2"]))
+
+    def test_seccion_filtro_a2_cero_y_tubo_floor(self):
+        sec = calcular_seccion(
+            tipo="FILTRO",
+            diametro_m=0.2,
+            espesor_m=0.01,
+            ancho_excavacion_m=0.8,
+            relacion_atraque="1:4",
+        )
+        self.assertEqual(sec["area_2_m2"], 0.0)
+        a_tub_geo = area_tuberia_m2(0.2, 0.01)
+        self.assertEqual(sec["area_tuberia_m2"], _floor_area_tubo_filtro_2dec(a_tub_geo))
+        self.assertGreaterEqual(sec["area_tuberia_m2"], 0.01)
+
+    def test_descuento_usa_mismo_espesor_mostrado(self):
+        """0.475 no puede verse 0.475 y calcularse como otro valor."""
+        from topografia_planilla_tuberia import calcular_cantidades_y_descuentos
+
+        seccion = {
+            "tipo": "ALCANTARILLA",
+            "ancho_excavacion_m": 1.5,
+            "area_1_m2": 0.475,
+            "area_2_m2": 0.312,
+            "area_tuberia_m2": 0.785,
+            "traslapo_m": 0,
+        }
+        cartera = {"totales": {
+            "longitud_m": 90.0,
+            "prom_altura_excavacion": 1.0,
+            "prom_altura_triturado": 0.2,
+            "prom_altura_relleno": 0.5,
+            "prom_ancho_geotextil": 0,
+        }}
+        out = calcular_cantidades_y_descuentos(seccion, cartera)
+        by = {d["codigo"]: d for d in out["descuentos"]}
+        self.assertEqual(by["DESC_A1"]["espesor"], 0.47)
+        self.assertEqual(by["DESC_A2"]["espesor"], 0.31)
+        self.assertAlmostEqual(by["DESC_A1"]["cantidad"], round(90.0 * 0.47, 2), places=2)
+        self.assertAlmostEqual(by["DESC_A2"]["cantidad"], round(90.0 * 0.31, 2), places=2)
 
 
 class TestCarteraXlsm(unittest.TestCase):
@@ -223,9 +298,9 @@ class TestCantidadesDescuentosXlsm(unittest.TestCase):
         by = {d["codigo"]: d for d in out["descuentos"]}
         self.assertAlmostEqual(by["DESC_OTROS_1"]["espesor"], 0.01, places=2)
         self.assertAlmostEqual(by["DESC_OTROS_1"]["cantidad"], 0.90, places=2)
-        # Area 1: L=90, a1=0.009 → 90×0.01 = 0.90 (no 0.81)
-        self.assertAlmostEqual(by["DESC_A1"]["espesor"], 0.01, places=2)
-        self.assertAlmostEqual(by["DESC_A1"]["cantidad"], 0.90, places=2)
+        # Area 1: floor(0.009)=0.00 → cantidad 0 (regla A1/A2 distinta a OTROS).
+        self.assertAlmostEqual(by["DESC_A1"]["espesor"], 0.0, places=2)
+        self.assertAlmostEqual(by["DESC_A1"]["cantidad"], 0.0, places=2)
 
     def test_multi_desc_otros_dims_independientes(self):
         r = calcular_planilla_completa(
@@ -424,15 +499,16 @@ class TestDescuentosPorTipoXlsm(unittest.TestCase):
         L = r["cartera"]["totales"]["longitud_m"]
         a1 = r["seccion"]["area_1_m2"]
         a2 = r["seccion"]["area_2_m2"]
-        # N46 = PRODUCT(ROUND(L,2), Ancho vacío, ROUND(Area1,2))
+        # A1/A2 ya vienen floor a 2; espesor mostrado = usado en PRODUCT
         self.assertAlmostEqual(by["DESC_A1"]["long"], round(L, 2), places=2)
         self.assertIsNone(by["DESC_A1"]["ancho"])
-        self.assertAlmostEqual(by["DESC_A1"]["espesor"], round(a1, 2), places=2)
+        self.assertAlmostEqual(by["DESC_A1"]["espesor"], a1, places=2)
+        self.assertEqual(by["DESC_A1"]["espesor"], _floor_area_2dec(a1))
         self.assertAlmostEqual(
-            by["DESC_A1"]["cantidad"], round(round(L, 2) * round(a1, 2), 2), places=2
+            by["DESC_A1"]["cantidad"], round(round(L, 2) * a1, 2), places=2
         )
         self.assertAlmostEqual(
-            by["DESC_A2"]["cantidad"], round(round(L, 2) * round(a2, 2), 2), places=2
+            by["DESC_A2"]["cantidad"], round(round(L, 2) * a2, 2), places=2
         )
         netos = {n["codigo"]: n for n in r["netos"]}
         # G48 = N46 restado de TRI; G49 = N47 mostrado en REL sin restar
@@ -452,12 +528,13 @@ class TestDescuentosPorTipoXlsm(unittest.TestCase):
         self.assertNotIn("DESC_A2", by)
         L = r["cartera"]["totales"]["longitud_m"]
         a_tub = r["seccion"]["area_tuberia_m2"]
+        self.assertEqual(r["seccion"]["area_2_m2"], 0.0)
         self.assertAlmostEqual(by["DESC_TUB_FILT"]["long"], round(L, 2), places=2)
         self.assertIsNone(by["DESC_TUB_FILT"]["ancho"])
-        self.assertAlmostEqual(by["DESC_TUB_FILT"]["espesor"], round(a_tub, 2), places=2)
+        self.assertAlmostEqual(by["DESC_TUB_FILT"]["espesor"], a_tub, places=2)
         self.assertAlmostEqual(
             by["DESC_TUB_FILT"]["cantidad"],
-            round(round(L, 2) * round(a_tub, 2), 2),
+            round(round(L, 2) * a_tub, 2),
             places=2,
         )
         netos = {n["codigo"]: n for n in r["netos"]}

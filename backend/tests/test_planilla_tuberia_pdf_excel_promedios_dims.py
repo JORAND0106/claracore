@@ -103,14 +103,14 @@ class TestCaptionsDimensiones(unittest.TestCase):
         self.assertIn("h_exc=2.12 m", l1)
         self.assertIn("h_atr=0.456 m", l1)
         self.assertIn("(1:3)", l1)
-        self.assertIn("A1=0.1234 m²", l2)
-        self.assertIn("A2=0.5678 m²", l2)
+        self.assertIn("A1=0.12 m²", l2)
+        self.assertIn("A2=0.56 m²", l2)
 
     def test_bloque_graficos_incluye_dims_con_png(self):
         html = self.mod.html_bloque_graficos_pdf(_calculo_sample(), tipo="ALCANTARILLA")
         self.assertIn("B=1.50 m", html)
         self.assertIn("Øext=1.000 m", html)
-        self.assertIn("A1=0.1234", html)
+        self.assertIn("A1=0.12", html)
         self.assertIn("seccion-dims", html)
         self.assertIn("data:image/png", html)
 
@@ -225,7 +225,7 @@ class TestSelladaUsaCalculoCongelado(unittest.TestCase):
             frozen["seccion_tipica"], tipo="ALCANTARILLA"
         )
         self.assertIn("B=2.25 m", l1)
-        self.assertIn("A1=0.9999", l2)
+        self.assertIn("A1=0.99", l2)
         self.assertIn("Nota congelada sellada XYZ", mod.html_notas_descuento_volumen_pdf(frozen))
 
         from topografia_planilla_tuberia_excel import build_planilla_tuberia_xlsx

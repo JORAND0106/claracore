@@ -1055,7 +1055,23 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
         _set(ws, "I13", float(planilla["diametro_m"]))
     if planilla.get("espesor_m") is not None:
         _set(ws, "J13", float(planilla["espesor_m"]))
-    _set(ws, "K13", "=ROUND((PI()*((I13/2)+J13)^2),3)")
+    # Área tubería / A1 / A2: literales del motor (floor a 2 dec) para que
+    # Excel/memoria coincidan con pantalla, cantidades y SicoeObra.
+    st = ((calculo or {}).get("seccion") or (calculo or {}).get("seccion_tipica") or {})
+    a_tub_v = st.get("area_tuberia_m2")
+    a1_v = st.get("area_1_m2")
+    if a1_v is None:
+        a1_v = planilla.get("area_1_m2")
+    a2_v = st.get("area_2_m2")
+    if a2_v is None:
+        a2_v = planilla.get("area_2_m2")
+    if a_tub_v is not None:
+        try:
+            _set(ws, "K13", float(a_tub_v))
+        except (TypeError, ValueError):
+            _set(ws, "K13", "=ROUND((PI()*((I13/2)+J13)^2),3)")
+    else:
+        _set(ws, "K13", "=ROUND((PI()*((I13/2)+J13)^2),3)")
     if planilla.get("material"):
         _set(ws, "L13", planilla["material"])
     _set(ws, "M13", tipo)
@@ -1085,14 +1101,22 @@ def _overlay_data(ws, planilla: dict, calculo: Optional[dict], tipo: str, vacia:
     if planilla.get("ancho_excavacion_m") is not None:
         _set(ws, "G15", float(planilla["ancho_excavacion_m"]))
 
-    _set(
-        ws,
-        "B15",
-        '=IFERROR(IF($E$15="","",_xlfn.LET(_xlpm.r,$I$13/2+$J$13,_xlpm.h,$E$15,'
-        "ROUND(_xlpm.r^2*ACOS((_xlpm.r-_xlpm.h)/_xlpm.r)"
-        '-(_xlpm.r-_xlpm.h)*SQRT(2*_xlpm.r*_xlpm.h-_xlpm.h^2),3))),"")',
-    )
-    _set(ws, "C15", '=IFERROR(ROUND(K13-B15,3),"")')
+    if a1_v is not None:
+        try:
+            _set(ws, "B15", float(a1_v))
+        except (TypeError, ValueError):
+            _set(ws, "B15", None)
+    else:
+        _set(ws, "B15", None)
+    if not es_alc:
+        _set(ws, "C15", 0.0)
+    elif a2_v is not None:
+        try:
+            _set(ws, "C15", float(a2_v))
+        except (TypeError, ValueError):
+            _set(ws, "C15", None)
+    else:
+        _set(ws, "C15", None)
     _set(
         ws,
         "E15",

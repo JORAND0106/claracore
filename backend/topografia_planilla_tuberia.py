@@ -11,6 +11,7 @@ import html
 import math
 import re
 from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_FLOOR
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -334,12 +335,51 @@ def _product(vals: list[Optional[float]]) -> Optional[float]:
 # Coherente con la presentación UI/PDF/Excel; distinto del payload SICOE (dims 3).
 DECIMALES_RESUMEN_CANTIDADES = 2
 
+# Áreas de descuento A1/A2 (y tubo filtro): único valor válido = floor decimal a 2 dec.
+DECIMALES_AREA_DESCUENTO = 2
+AREA_TUBO_FILTRO_MIN_M2 = 0.01
+
 
 def _dim_resumen_2(v: Optional[float]) -> Optional[float]:
     """Factor de dimensión para PRODUCT de Resumen/Descuentos (2 dec)."""
     if v is None:
         return None
     return round(float(v), DECIMALES_RESUMEN_CANTIDADES)
+
+
+def _floor_area_2dec(v: Optional[float]) -> Optional[float]:
+    """
+    Área de descuento A1/A2: siempre hacia abajo a 2 decimales con aritmética decimal.
+    Ej.: 0,4752 → 0,47; 0,47 → 0,47. Evita el sesgo de float (0,475 → 0,474999…).
+    """
+    if v is None:
+        return None
+    try:
+        d = Decimal(str(v))
+    except Exception:
+        try:
+            d = Decimal(str(float(v)))
+        except Exception:
+            return None
+    q = d.quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+    return float(q)
+
+
+def _floor_area_tubo_filtro_2dec(v: Optional[float]) -> Optional[float]:
+    """
+    Área del tubo de filtro a 2 dec (floor). Si el floor dejaría 0 con área > 0,
+    se usa el mínimo vigente 0,01 m² (nunca 0 por efecto del redondeo).
+    """
+    floored = _floor_area_2dec(v)
+    if floored is None:
+        return None
+    try:
+        raw = float(v)
+    except (TypeError, ValueError):
+        return floored
+    if raw > 0.0 and floored <= 0.0:
+        return float(AREA_TUBO_FILTRO_MIN_M2)
+    return floored
 
 
 def _product_resumen(vals: list[Optional[float]]) -> Optional[float]:
@@ -442,9 +482,20 @@ def calcular_seccion(
     if traslapo < 0:
         raise ValueError("Traslapo ≥ 0.")
     h = altura_relleno_atraque_m(theta, esp, relacion_atraque)
-    a_tub = area_tuberia_m2(theta, esp)
-    a1 = area_1_m2(theta, esp, b, relacion_atraque, altura_relleno_m=h)
-    a2 = area_2_m2(theta, esp, relacion_atraque, area_1=a1)
+    # Geometría intermedia a 3 dec; el valor canónico de descuento es floor a 2 dec.
+    a_tub_geo = area_tuberia_m2(theta, esp)
+    a1_geo = area_1_m2(theta, esp, b, relacion_atraque, altura_relleno_m=h)
+    a2_geo = area_2_m2(theta, esp, relacion_atraque, area_1=a1_geo)
+    if tipo_u == "FILTRO":
+        # Filtro: solo área 1 / tubo; A2 siempre 0 (no diligenciable).
+        a_tub = _floor_area_tubo_filtro_2dec(a_tub_geo)
+        a1 = _floor_area_2dec(a1_geo) or 0.0
+        a2 = 0.0
+    else:
+        # ALC (diámetro mayor): A1 y A2 floor a 2 dec — único valor pantalla/calc/Sicoe.
+        a_tub = a_tub_geo
+        a1 = _floor_area_2dec(a1_geo) or 0.0
+        a2 = _floor_area_2dec(a2_geo) or 0.0
     return {
         "tipo": tipo_u,
         "titulo": TITULO_FILTRO if tipo_u == "FILTRO" else TITULO_ALCANTARILLA,
@@ -921,9 +972,13 @@ def calcular_cantidades_y_descuentos(
     tot = cartera.get("totales") or {}
     L = float(tot.get("longitud_m") or 0.0)
     B = float(seccion["ancho_excavacion_m"])
-    a1 = float(seccion["area_1_m2"])
-    a2 = float(seccion["area_2_m2"])
-    a_tub = float(seccion["area_tuberia_m2"])
+    # Áreas de descuento: floor decimal a 2 (idempotente si ya vienen de calcular_seccion).
+    a1 = float(_floor_area_2dec(seccion["area_1_m2"]) or 0.0)
+    a2 = 0.0 if tipo == "FILTRO" else float(_floor_area_2dec(seccion["area_2_m2"]) or 0.0)
+    if tipo == "FILTRO":
+        a_tub = float(_floor_area_tubo_filtro_2dec(seccion["area_tuberia_m2"]) or 0.0)
+    else:
+        a_tub = float(seccion["area_tuberia_m2"])
     h_exc = float(tot.get("prom_altura_excavacion") or 0.0)
     h_trit = float(tot.get("prom_altura_triturado") or 0.0)
     h_rel = float(tot.get("prom_altura_relleno") or 0.0)

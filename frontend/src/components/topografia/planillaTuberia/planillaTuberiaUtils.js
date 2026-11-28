@@ -1089,9 +1089,8 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
   const cama = fmt(desglose.cama_triturado_m, 3)
   const hTrit = fmt(desglose.altura_triturado_m, 3)
   const b = fmt(desglose.ancho_excavacion_m, 3)
-  const a1 = fmt(desglose.area_1_m2, 3)
-  const a1fine = fmt(desglose.area_1_m2, 4)
-  const a2 = fmt(desglose.area_2_m2, 4)
+  const a1 = fmt(desglose.area_1_m2, 2)
+  const a2 = fmt(desglose.area_2_m2, 2)
   const sec = fmt(desglose.seccion_atraque_m2, 3)
   const formulaHatr = desglose.radio_externo_m != null
     ? `2·r/${desglose.denominador}`
@@ -1125,9 +1124,9 @@ export function pasosDesgloseAtraque(desglose, fmt = fmtNDash) {
       key: 'a1',
       titulo: 'A1',
       formula: 'Área 1',
-      valor: a1fine,
+      valor: a1,
       unidad: 'm²',
-      operacion: `Área 1 = ${a1fine} m²`,
+      operacion: `Área 1 = ${a1} m²`,
     },
     {
       key: 'a2',

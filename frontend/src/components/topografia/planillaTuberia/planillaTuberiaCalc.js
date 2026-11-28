@@ -213,8 +213,32 @@ function r4(v) { return v == null ? null : Math.round(v * 10000) / 10000 }
 /** Decimales de Long/Ancho/Espesor en Resumen/Descuentos (entrada del PRODUCT). */
 export const DECIMALES_RESUMEN_CANTIDADES = 2
 
+/** Áreas de descuento A1/A2 (y tubo filtro): floor decimal a 2 dec. */
+export const DECIMALES_AREA_DESCUENTO = 2
+export const AREA_TUBO_FILTRO_MIN_M2 = 0.01
+
 function dimResumen2(v) {
   return v == null ? null : Math.round(Number(v) * 100) / 100
+}
+
+/**
+ * Floor decimal exacto a 2 dec (evita sesgo float: 0.475 → 0.47, no 0.48).
+ * Áreas ≥ 0: truncar hacia abajo con epsilon anti-ruido de IEEE.
+ */
+export function floorArea2dec(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  if (!Number.isFinite(n)) return null
+  return Math.floor(n * 100 + 1e-9) / 100
+}
+
+/** Tubo filtro: floor a 2 dec; si raw>0 y floor=0 → mínimo 0.01. */
+export function floorAreaTuboFiltro2dec(v) {
+  const floored = floorArea2dec(v)
+  if (floored == null) return null
+  const raw = Number(v)
+  if (Number.isFinite(raw) && raw > 0 && floored <= 0) return AREA_TUBO_FILTRO_MIN_M2
+  return floored
 }
 
 function avg(vals) {
@@ -290,9 +314,21 @@ export function calcularSeccion({
   }
   if (traslapo < 0) throw new Error('Traslapo ≥ 0.')
   const h = alturaRellenoAtraqueM(theta, esp, relacionAtraque)
-  const aTub = areaTuberiaM2(theta, esp)
-  const a1 = area1M2(theta, esp, b, relacionAtraque, h)
-  const a2 = area2M2(theta, esp, relacionAtraque, a1)
+  const aTubGeo = areaTuberiaM2(theta, esp)
+  const a1Geo = area1M2(theta, esp, b, relacionAtraque, h)
+  const a2Geo = area2M2(theta, esp, relacionAtraque, a1Geo)
+  let aTub
+  let a1
+  let a2
+  if (tipoU === 'FILTRO') {
+    aTub = floorAreaTuboFiltro2dec(aTubGeo)
+    a1 = floorArea2dec(a1Geo) ?? 0
+    a2 = 0
+  } else {
+    aTub = aTubGeo
+    a1 = floorArea2dec(a1Geo) ?? 0
+    a2 = floorArea2dec(a2Geo) ?? 0
+  }
   return {
     tipo: tipoU,
     diametro_m: theta,
@@ -535,9 +571,11 @@ export function calcularCantidadesYDescuentos(seccion, cartera, {
   const tot = cartera.totales || {}
   const L = Number(tot.longitud_m || 0)
   const B = Number(seccion.ancho_excavacion_m)
-  const a1 = Number(seccion.area_1_m2)
-  const a2 = Number(seccion.area_2_m2)
-  const aTub = Number(seccion.area_tuberia_m2)
+  const a1 = floorArea2dec(seccion.area_1_m2) ?? 0
+  const a2 = tipo === 'FILTRO' ? 0 : (floorArea2dec(seccion.area_2_m2) ?? 0)
+  const aTub = tipo === 'FILTRO'
+    ? (floorAreaTuboFiltro2dec(seccion.area_tuberia_m2) ?? 0)
+    : Number(seccion.area_tuberia_m2)
   let hExc = Number(tot.prom_altura_excavacion || 0)
   let hTrit = Number(tot.prom_altura_triturado || 0)
   let hRel = Number(tot.prom_altura_relleno || 0)
