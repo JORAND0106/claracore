@@ -25,6 +25,7 @@ import {
   planEsquemaSalidaHeader,
 } from './esquemaSalidaHeader.js'
 import {
+  applyGlobalMemoriaNumbers,
   labelsFromSnapshot,
   memoriaDisplayRows,
   renderMemoriaColorTableCanvas,
@@ -426,7 +427,9 @@ export function planEsquemaExportSalida({
   imageWidth = EXPORT_MIN_WIDTH,
   solids3d = null,
 } = {}) {
-  const snaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
+  const rawSnaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
+  // C-OUT-24: un cuadro por cálculo; # globales; sin total general.
+  const { snapshots: snaps } = applyGlobalMemoriaNumbers(rawSnaps)
   const header = planEsquemaSalidaHeader({
     imageWidth,
     tipoTitulo: 'Esquema',
@@ -440,6 +443,7 @@ export function planEsquemaExportSalida({
     const rows = memoriaDisplayRows(snap)
     return {
       nombre: snap.nombre || 'Cálculo',
+      hasCalcTitle: !!String(snap.nombre || '').trim(),
       rowCount: rows.length,
       columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
       totalM3: snap.totalM3,
@@ -447,6 +451,7 @@ export function planEsquemaExportSalida({
       nums: rows.map((r) => r.numLabel || r.num || r.index).filter((x) => x != null),
     }
   })
+  const totals = memoriaPlans.map((m) => Number(m.totalM3) || 0)
   return {
     kind: snaps.length ? 'esquema-con-memoria' : (hasCoords ? 'esquema-con-coords' : 'esquema-sin-tablas'),
     header,
@@ -458,6 +463,11 @@ export function planEsquemaExportSalida({
     hasMemoriaTable: memoriaPlans.length > 0,
     hasCoordsTable: hasCoords,
     memoria: memoriaPlans,
+    /** C-OUT-24 */
+    cuadrosPorCalculo: memoriaPlans.length,
+    sinTotalGeneral: true,
+    totalGeneralM3: null,
+    calcTotalsM3: totals,
     columnsRequired: snaps.length ? [...ESQUEMA_MEMORIA_TABLE_COLUMNS] : null,
     minFontFrac: 1 / 55,
     headersIntact: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
@@ -492,7 +502,9 @@ export async function composeEsquemaExport({
   }
   const margin = EXPORT_MARGIN
   const rows = nodes || []
-  const snaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
+  const rawSnaps = (calcSnapshots || []).filter(esquemaSnapshotTieneMemoria)
+  // C-OUT-24: numeración única en toda la imagen; un canvas por cálculo.
+  const { snapshots: snaps, labels: globalLabels } = applyGlobalMemoriaNumbers(rawSnaps)
   const solids = (solids3d || []).filter((s) => s?.type === 'solid3d' && s.cells?.length)
   const exportView = resolveEsquemaExportView3d(solids)
   void view3d
@@ -524,7 +536,7 @@ export async function composeEsquemaExport({
   })
   const headerH = headerPlan.height
 
-  // Tablas de memoria (una por cálculo) a ancho útil.
+  // Tablas de memoria (una por cálculo, con título) a ancho útil. Sin total general.
   const memoriaCanvases = []
   for (const snap of snaps) {
     const table = renderMemoriaColorTableCanvas(snap, {
@@ -571,12 +583,14 @@ export async function composeEsquemaExport({
   const bb2d = sceneExportBounds(objs2d)
   const bb3d = mode3d ? solidsExportBounds(solids, exportView, cam) : null
   const bb = mergeExportBounds(objs2d.length ? bb2d : null, bb3d) || bb2d
-  // Números de identificación (#) en el isométrico exportado.
-  let exportLabels = []
-  for (const snap of snaps) {
-    for (const lb of labelsFromSnapshot(snap) || []) {
-      if (lb?.solidId != null && !exportLabels.some((x) => x.solidId === lb.solidId)) {
-        exportLabels.push(lb)
+  // Números de identificación (#) globales (mismo # en iso y en cada cuadro).
+  let exportLabels = (globalLabels || []).filter((lb) => lb?.solidId != null)
+  if (!exportLabels.length) {
+    for (const snap of snaps) {
+      for (const lb of labelsFromSnapshot(snap) || []) {
+        if (lb?.solidId != null && !exportLabels.some((x) => x.solidId === lb.solidId)) {
+          exportLabels.push(lb)
+        }
       }
     }
   }
@@ -618,6 +632,7 @@ export async function composeEsquemaExport({
     const rowsM = memoriaDisplayRows(snap)
     memoriaMeta.push({
       nombre: snap.nombre,
+      hasCalcTitle: !!String(snap.nombre || '').trim(),
       rowCount: rowsM.length,
       columns: [...ESQUEMA_MEMORIA_TABLE_COLUMNS],
       totalM3: snap.totalM3,
@@ -650,21 +665,23 @@ export async function composeEsquemaExport({
   if (!isEsquemaPngDataUrl(dataUrl)) {
     throw new Error('El esquema debe guardarse como PNG.')
   }
+  const planMeta = planEsquemaExportSalida({
+    title,
+    nodes: rows,
+    calcSnapshots: snaps,
+    brandTitle,
+    imageWidth: w,
+    solids3d: solids,
+  })
   const meta = {
-    ...planEsquemaExportSalida({
-      title,
-      nodes: rows,
-      calcSnapshots: snaps,
-      brandTitle,
-      imageWidth: w,
-      solids3d: solids,
-    }),
+    ...planMeta,
     header: headerMeta,
     exportView,
     hasSolids: mode3d,
-    memoria: memoriaMeta.length ? memoriaMeta : planEsquemaExportSalida({
-      title, nodes: rows, calcSnapshots: snaps, brandTitle, imageWidth: w, solids3d: solids,
-    }).memoria,
+    memoria: memoriaMeta.length ? memoriaMeta : planMeta.memoria,
+    cuadrosPorCalculo: memoriaMeta.length || planMeta.cuadrosPorCalculo || 0,
+    sinTotalGeneral: true,
+    totalGeneralM3: null,
     width: w,
     height: h,
     cellFontPx: exportCoordTableMetrics(w - margin * 2, { heightBoost }).bodyFontPx,

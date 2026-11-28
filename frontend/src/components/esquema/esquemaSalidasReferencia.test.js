@@ -36,6 +36,7 @@ describe('esquemaSalidasReferencia · catálogo aprobado', () => {
     assert.ok(ids.includes('esquema-sin-solidos-top'))
     assert.ok(ids.includes('esquema-con-texturas'))
     assert.ok(ids.includes('esquema-preview-completa'))
+    assert.ok(ids.includes('esquema-multi-calculo-cuadros'))
     assert.ok(ids.includes('memoria-volúmenes'))
     assert.ok(ids.includes('cuadro-despiece'))
     assert.ok(ids.includes('tabla-coordenadas'))

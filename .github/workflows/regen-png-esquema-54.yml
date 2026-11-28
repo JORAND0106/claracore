@@ -1,0 +1,136 @@
+# Regenera PNG del esquema #192 (reporte SicoeObra #54) con C-OUT-24.
+name: Regen PNG esquema reporte 54
+
+on:
+  push:
+    branches: [cursor/esquema-cuadros-por-calculo-4315]
+    paths:
+      - "frontend/src/components/esquema/**"
+      - "backend/scripts/regenerar_png_esquema_reporte_54.py"
+      - ".github/workflows/regen-png-esquema-54.yml"
+  workflow_dispatch:
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python deps
+        run: |
+          python -m pip install -q azure-identity azure-mgmt-web azure-storage-blob
+          python -m pip install -q -r backend/requirements.txt
+      - name: Install Node deps (canvas)
+        working-directory: ./frontend
+        run: |
+          npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts
+          npm install --no-save canvas
+      - name: Fetch scene from production + compose PNG
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          OUT: ${{ runner.temp }}/regen54
+        working-directory: ./backend
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          if [ -z "${AZURE_CREDENTIALS}" ]; then echo "AZURE_CREDENTIALS ausente"; exit 1; fi
+          PYTHONPATH=. python3 - <<'PY'
+          import json, os
+          from azure.identity import ClientSecretCredential
+          from azure.mgmt.web import WebSiteManagementClient
+          from supabase import create_client
+
+          creds = json.loads(os.environ["AZURE_CREDENTIALS"])
+          credential = ClientSecretCredential(creds["tenantId"], creds["clientId"], creds["clientSecret"])
+          client = WebSiteManagementClient(credential, creds["subscriptionId"])
+          rg = None
+          for site in client.web_apps.list():
+              if site.name == "claracore-backend":
+                  parts = site.id.split("/")
+                  rg = parts[parts.index("resourceGroups") + 1]
+                  break
+          props = dict(client.web_apps.list_application_settings(rg, "claracore-backend").properties or {})
+          sb = create_client(props["SUPABASE_URL"].rstrip("/"), props["SUPABASE_KEY"])
+          rep = (sb.table("so_reportes").select("id").eq("numero_reporte", 54)
+                 .ilike("descripcion_actividad", "%Encole%").limit(1).execute().data or [None])[0]
+          assert rep, "reporte 54 no encontrado"
+          regs = (sb.table("so_registros")
+                  .select("id,graficos_historial")
+                  .eq("reporte_id", rep["id"]).execute().data or [])
+          scene = None
+          for reg in regs:
+              hist = reg.get("graficos_historial") or []
+              if isinstance(hist, str):
+                  hist = json.loads(hist)
+              for g in hist:
+                  if not isinstance(g, dict):
+                      continue
+                  if str(g.get("esquema_id") or "") == "fda065a0-1c2b-41d5-848d-9d0dc25bacc2" or g.get("numero") == 192:
+                      scene = g.get("scene") or g.get("esquema_scene")
+                      if scene:
+                          break
+              if scene:
+                  break
+          assert scene and (scene.get("volumeCalcs") or []), "sin escena/volumeCalcs"
+          out = os.environ["OUT"]
+          with open(os.path.join(out, "scene.json"), "w", encoding="utf-8") as f:
+              json.dump(scene, f)
+          print("scene ok calcs", len(scene.get("volumeCalcs") or []), "solids", len(scene.get("solids3d") or []))
+          PY
+          cd ../frontend
+          node --input-type=module <<'EOF'
+          import { createRequire } from 'module'
+          import { readFileSync, writeFileSync } from 'fs'
+          import { freezeCalcSnapshot } from './src/components/esquema/esquema3dCalc.js'
+          import { drawSolid3d } from './src/components/esquema/esquema3dSolids.js'
+          const require = createRequire(import.meta.url)
+          const { createCanvas, Image } = require('canvas')
+          globalThis.document = { createElement(tag) { return tag === 'canvas' ? createCanvas(10, 10) : { style: {} } } }
+          globalThis.Image = Image
+          const { composeEsquemaExport } = await import('./src/components/esquema/esquemaExport.js')
+          const out = process.env.OUT
+          const scene = JSON.parse(readFileSync(`${out}/scene.json`, 'utf8'))
+          const solids = (scene.solids3d || []).filter((s) => s?.type === 'solid3d')
+          const snaps = (scene.volumeCalcs || []).map((c) => freezeCalcSnapshot(c, solids))
+          const result = await composeEsquemaExport({
+            title: scene.title || 'Poceta de Encole',
+            objects: scene.objects || [],
+            nodes: [],
+            drawObject: () => {},
+            solids3d: solids,
+            drawSolid: drawSolid3d,
+            calcSnapshots: snaps,
+            returnMeta: true,
+          })
+          writeFileSync(`${out}/meta.json`, JSON.stringify({
+            cuadrosPorCalculo: result.meta.cuadrosPorCalculo,
+            sinTotalGeneral: result.meta.sinTotalGeneral,
+            totalGeneralM3: result.meta.totalGeneralM3,
+            memoria: result.meta.memoria,
+            w: result.meta.width,
+            h: result.meta.height,
+          }, null, 2))
+          writeFileSync(`${out}/grafico_192.png`, Buffer.from(result.dataUrl.split(',')[1], 'base64'))
+          console.log('PNG', result.meta.cuadrosPorCalculo, 'cuadros', result.meta.width, 'x', result.meta.height)
+          if (result.meta.cuadrosPorCalculo !== 4 || result.meta.totalGeneralM3 != null) process.exit(2)
+          EOF
+      - name: Upload PNG to production blob + update registros
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          REGEN_PNG_PATH: ${{ runner.temp }}/regen54/grafico_192.png
+          REGEN_OUT_DIR: ${{ runner.temp }}/regen54
+        working-directory: ./backend
+        run: |
+          PYTHONPATH=. python3 scripts/regenerar_png_esquema_reporte_54.py
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regen-esquema-54-${{ github.run_id }}
+          path: ${{ runner.temp }}/regen54/
+          if-no-files-found: warn
